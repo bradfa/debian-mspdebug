@@ -26,54 +26,51 @@
 #include "binfile.h"
 #include "stab.h"
 #include "expr.h"
-#include "cproc.h"
-#include "cproc_util.h"
+#include "reader.h"
+#include "output_util.h"
 #include "util.h"
 #include "dis.h"
 
-static int cmd_regs(cproc_t cp, char **arg)
+int cmd_regs(char **arg)
 {
-	device_t dev = cproc_device(cp);
-	uint16_t regs[DEVICE_NUM_REGS];
+	address_t regs[DEVICE_NUM_REGS];
 	uint8_t code[16];
 	int len = sizeof(code);
 
-	if (dev->getregs(dev, regs) < 0)
+	if (device_default->getregs(device_default, regs) < 0)
 		return -1;
-	cproc_regs(cp, regs);
+	show_regs(regs);
 
 	/* Try to disassemble the instruction at PC */
 	if (len > 0x10000 - regs[0])
 		len = 0x10000 - regs[0];
-	if (dev->readmem(dev, regs[0], code, len) < 0)
+	if (device_default->readmem(device_default, regs[0], code, len) < 0)
 		return 0;
 
-	cproc_disassemble(cp, regs[0], (uint8_t *)code, len);
+	disassemble(regs[0], (uint8_t *)code, len);
 	return 0;
 }
 
-static int cmd_md(cproc_t cp, char **arg)
+int cmd_md(char **arg)
 {
-	stab_t stab = cproc_stab(cp);
-	device_t dev = cproc_device(cp);
 	char *off_text = get_arg(arg);
 	char *len_text = get_arg(arg);
-	int offset = 0;
-	int length = 0x40;
+	address_t offset = 0;
+	address_t length = 0x40;
 
 	if (!off_text) {
-		fprintf(stderr, "md: offset must be specified\n");
+		printc_err("md: offset must be specified\n");
 		return -1;
 	}
 
-	if (expr_eval(stab, off_text, &offset) < 0) {
-		fprintf(stderr, "md: can't parse offset: %s\n", off_text);
+	if (expr_eval(stab_default, off_text, &offset) < 0) {
+		printc_err("md: can't parse offset: %s\n", off_text);
 		return -1;
 	}
 
 	if (len_text) {
-		if (expr_eval(stab, len_text, &length) < 0) {
-			fprintf(stderr, "md: can't parse length: %s\n",
+		if (expr_eval(stab_default, len_text, &length) < 0) {
+			printc_err("md: can't parse length: %s\n",
 				len_text);
 			return -1;
 		}
@@ -81,18 +78,14 @@ static int cmd_md(cproc_t cp, char **arg)
 		length = 0x10000 - offset;
 	}
 
-	if (offset < 0 || length <= 0 || (offset + length) > 0x10000) {
-		fprintf(stderr, "md: memory out of range\n");
-		return -1;
-	}
-
 	while (length) {
 		uint8_t buf[128];
 		int blen = length > sizeof(buf) ? sizeof(buf) : length;
 
-		if (dev->readmem(dev, offset, buf, blen) < 0)
+		if (device_default->readmem(device_default,
+					    offset, buf, blen) < 0)
 			return -1;
-		cproc_hexdump(cp, offset, buf, blen);
+		hexdump(offset, buf, blen);
 
 		offset += blen;
 		length -= blen;
@@ -101,29 +94,27 @@ static int cmd_md(cproc_t cp, char **arg)
 	return 0;
 }
 
-static int cmd_mw(cproc_t cp, char **arg)
+int cmd_mw(char **arg)
 {
-	device_t dev = cproc_device(cp);
-	stab_t stab = cproc_stab(cp);
 	char *off_text = get_arg(arg);
 	char *byte_text;
-	int offset = 0;
-	int length = 0;
+	address_t offset = 0;
+	address_t length = 0;
 	uint8_t buf[1024];
 
 	if (!off_text) {
-		fprintf(stderr, "md: offset must be specified\n");
+		printc_err("md: offset must be specified\n");
 		return -1;
 	}
 
-	if (expr_eval(stab, off_text, &offset) < 0) {
-		fprintf(stderr, "md: can't parse offset: %s\n", off_text);
+	if (expr_eval(stab_default, off_text, &offset) < 0) {
+		printc_err("md: can't parse offset: %s\n", off_text);
 		return -1;
 	}
 
 	while ((byte_text = get_arg(arg))) {
 		if (length >= sizeof(buf)) {
-			fprintf(stderr, "md: maximum length exceeded\n");
+			printc_err("md: maximum length exceeded\n");
 			return -1;
 		}
 
@@ -133,38 +124,28 @@ static int cmd_mw(cproc_t cp, char **arg)
 	if (!length)
 		return 0;
 
-	if (offset < 0 || (offset + length) > 0x10000) {
-		fprintf(stderr, "md: memory out of range\n");
-		return -1;
-	}
-
-	if (dev->writemem(dev, offset, buf, length) < 0)
+	if (device_default->writemem(device_default, offset, buf, length) < 0)
 		return -1;
 
 	return 0;
 }
 
-static int cmd_reset(cproc_t cp, char **arg)
+int cmd_reset(char **arg)
 {
-	device_t dev = cproc_device(cp);
-
-	return dev->ctl(dev, DEVICE_CTL_RESET);
+	return device_default->ctl(device_default, DEVICE_CTL_RESET);
 }
 
-static int cmd_erase(cproc_t cp, char **arg)
+int cmd_erase(char **arg)
 {
-	device_t dev = cproc_device(cp);
-
-	if (dev->ctl(dev, DEVICE_CTL_HALT) < 0)
+	if (device_default->ctl(device_default, DEVICE_CTL_HALT) < 0)
 		return -1;
 
-	printf("Erasing...\n");
-	return dev->ctl(dev, DEVICE_CTL_ERASE);
+	printc("Erasing...\n");
+	return device_default->ctl(device_default, DEVICE_CTL_ERASE);
 }
 
-static int cmd_step(cproc_t cp, char **arg)
+int cmd_step(char **arg)
 {
-	device_t dev = cproc_device(cp);
 	char *count_text = get_arg(arg);
 	int count = 1;
 
@@ -172,122 +153,118 @@ static int cmd_step(cproc_t cp, char **arg)
 		count = atoi(count_text);
 
 	while (count > 0) {
-		if (dev->ctl(dev, DEVICE_CTL_STEP) < 0)
+		if (device_default->ctl(device_default, DEVICE_CTL_STEP) < 0)
 			return -1;
 		count--;
 	}
 
-	return cmd_regs(cp, NULL);
+	return cmd_regs(NULL);
 }
 
-static int cmd_run(cproc_t cp, char **arg)
+int cmd_run(char **arg)
 {
-	device_t dev = cproc_device(cp);
 	device_status_t status;
-	uint16_t regs[DEVICE_NUM_REGS];
+	address_t regs[DEVICE_NUM_REGS];
 
-	if (dev->getregs(dev, regs) < 0) {
-		fprintf(stderr, "warning: device: can't fetch registers\n");
+	if (device_default->getregs(device_default, regs) < 0) {
+		printc_err("warning: device: can't fetch registers\n");
 	} else {
 		int i;
 
-		for (i = 0; i < dev->max_breakpoints; i++) {
-			struct device_breakpoint *bp = &dev->breakpoints[i];
+		for (i = 0; i < device_default->max_breakpoints; i++) {
+			struct device_breakpoint *bp =
+				&device_default->breakpoints[i];
 
 			if ((bp->flags & DEVICE_BP_ENABLED) &&
 			    bp->addr == regs[0])
 				break;
 		}
 
-		if (i < dev->max_breakpoints) {
-			printf("Stepping over breakpoint #%d at 0x%04x\n",
+		if (i < device_default->max_breakpoints) {
+			printc("Stepping over breakpoint #%d at 0x%04x\n",
 			       i, regs[0]);
-			dev->ctl(dev, DEVICE_CTL_STEP);
+			device_default->ctl(device_default, DEVICE_CTL_STEP);
 		}
 	}
 
-	if (dev->ctl(dev, DEVICE_CTL_RUN) < 0) {
-		fprintf(stderr, "run: failed to start CPU\n");
+	if (device_default->ctl(device_default, DEVICE_CTL_RUN) < 0) {
+		printc_err("run: failed to start CPU\n");
 		return -1;
 	}
 
-	printf("Running. Press Ctrl+C to interrupt...\n");
+	printc("Running. Press Ctrl+C to interrupt...\n");
 
 	do {
-		status = dev->poll(dev);
+		status = device_default->poll(device_default);
 	} while (status == DEVICE_STATUS_RUNNING);
 
 	if (status == DEVICE_STATUS_INTR)
-		printf("\n");
+		printc("\n");
 
 	if (status == DEVICE_STATUS_ERROR)
 		return -1;
 
-	if (dev->ctl(dev, DEVICE_CTL_HALT) < 0)
+	if (device_default->ctl(device_default, DEVICE_CTL_HALT) < 0)
 		return -1;
 
-	return cmd_regs(cp, NULL);
+	return cmd_regs(NULL);
 }
 
-static int cmd_set(cproc_t cp, char **arg)
+int cmd_set(char **arg)
 {
-	device_t dev = cproc_device(cp);
-	stab_t stab = cproc_stab(cp);
 	char *reg_text = get_arg(arg);
 	char *val_text = get_arg(arg);
 	int reg;
-	int value = 0;
-	uint16_t regs[DEVICE_NUM_REGS];
+	address_t value = 0;
+	address_t regs[DEVICE_NUM_REGS];
 
 	if (!(reg_text && val_text)) {
-		fprintf(stderr, "set: must specify a register and a value\n");
+		printc_err("set: must specify a register and a value\n");
 		return -1;
 	}
 
 	reg = dis_reg_from_name(reg_text);
 	if (reg < 0) {
-		fprintf(stderr, "set: unknown register: %s\n", reg_text);
+		printc_err("set: unknown register: %s\n", reg_text);
 		return -1;
 	}
 
-	if (expr_eval(stab, val_text, &value) < 0) {
-		fprintf(stderr, "set: can't parse value: %s\n", val_text);
+	if (expr_eval(stab_default, val_text, &value) < 0) {
+		printc_err("set: can't parse value: %s\n", val_text);
 		return -1;
 	}
 
-	if (dev->getregs(dev, regs) < 0)
+	if (device_default->getregs(device_default, regs) < 0)
 		return -1;
 	regs[reg] = value;
-	if (dev->setregs(dev, regs) < 0)
+	if (device_default->setregs(device_default, regs) < 0)
 		return -1;
 
-	cproc_regs(cp, regs);
+	show_regs(regs);
 	return 0;
 }
 
-static int cmd_dis(cproc_t cp, char **arg)
+int cmd_dis(char **arg)
 {
-	device_t dev = cproc_device(cp);
-	stab_t stab = cproc_stab(cp);
 	char *off_text = get_arg(arg);
 	char *len_text = get_arg(arg);
-	int offset = 0;
-	int length = 0x40;
-	uint8_t buf[4096];
+	address_t offset = 0;
+	address_t length = 0x40;
+	uint8_t *buf;
 
 	if (!off_text) {
-		fprintf(stderr, "dis: offset must be specified\n");
+		printc_err("dis: offset must be specified\n");
 		return -1;
 	}
 
-	if (expr_eval(stab, off_text, &offset) < 0) {
-		fprintf(stderr, "dis: can't parse offset: %s\n", off_text);
+	if (expr_eval(stab_default, off_text, &offset) < 0) {
+		printc_err("dis: can't parse offset: %s\n", off_text);
 		return -1;
 	}
 
 	if (len_text) {
-		if (expr_eval(stab, len_text, &length) < 0) {
-			fprintf(stderr, "dis: can't parse length: %s\n",
+		if (expr_eval(stab_default, len_text, &length) < 0) {
+			printc_err("dis: can't parse length: %s\n",
 				len_text);
 			return -1;
 		}
@@ -295,70 +272,96 @@ static int cmd_dis(cproc_t cp, char **arg)
 		length = 0x10000 - offset;
 	}
 
-	if (offset < 0 || length <= 0 || length > sizeof(buf) ||
-	    (offset + length) > 0x10000) {
-		fprintf(stderr, "dis: memory out of range\n");
+	buf = malloc(length);
+	if (!buf) {
+		pr_error("dis: couldn't allocate memory");
 		return -1;
 	}
 
-	if (dev->readmem(dev, offset, buf, length) < 0)
+	if (device_default->readmem(device_default,
+				    offset, buf, length) < 0) {
+		free(buf);
 		return -1;
+	}
 
-	cproc_disassemble(cp, offset, (uint8_t *)buf, length);
+	disassemble(offset, buf, length);
+	free(buf);
 	return 0;
 }
 
 struct hexout_data {
 	FILE            *file;
-	uint16_t        addr;
+	address_t       addr;
 	uint8_t         buf[16];
 	int             len;
+
+	uint16_t        segoff;
 };
 
 static int hexout_start(struct hexout_data *hexout, const char *filename)
 {
 	hexout->file = fopen(filename, "w");
 	if (!hexout->file) {
-		perror("hexout: couldn't open output file");
+		pr_error("hexout: couldn't open output file");
 		return -1;
 	}
 
 	hexout->addr = 0;
 	hexout->len = 0;
+	hexout->segoff = 0;
 
 	return 0;
 }
 
-static int hexout_flush(struct hexout_data *hexout)
+static int hexout_write(FILE *out, int len, uint16_t addr, int type,
+			const uint8_t *payload)
 {
 	int i;
 	int cksum = 0;
 
-	if (!hexout->len)
-		return 0;
-
-	if (fprintf(hexout->file, ":%02X%04X00",
-		    hexout->len, hexout->addr) < 0)
+	if (fprintf(out, ":%02X%04X00", len, addr) < 0)
 		goto fail;
-	cksum += hexout->len;
-	cksum += hexout->addr & 0xff;
-	cksum += hexout->addr >> 8;
+	cksum += len;
+	cksum += addr & 0xff;
+	cksum += addr >> 8;
 
-	for (i = 0; i < hexout->len; i++) {
-		if (fprintf(hexout->file, "%02X", hexout->buf[i]) < 0)
+	for (i = 0; i < len; i++) {
+		if (fprintf(out, "%02X", payload[i]) < 0)
 			goto fail;
-		cksum += hexout->buf[i];
+		cksum += payload[i];
 	}
 
-	if (fprintf(hexout->file, "%02X\n", ~(cksum - 1) & 0xff) < 0)
+	if (fprintf(out, "%02X\n", ~(cksum - 1) & 0xff) < 0)
 		goto fail;
 
-	hexout->len = 0;
 	return 0;
 
 fail:
-	perror("hexout: can't write HEX data");
+	pr_error("hexout: can't write HEX data");
 	return -1;
+}
+
+static int hexout_flush(struct hexout_data *hexout)
+{
+        address_t addr_low = hexout->addr & 0xffff;
+	address_t segoff = hexout->addr >> 16;
+
+	if (!hexout->len)
+		return 0;
+
+	if (segoff != hexout->segoff) {
+		uint8_t offset_data[] = {segoff >> 8, segoff & 0xff};
+
+		if (hexout_write(hexout->file, 2, 0, 4, offset_data) < 0)
+			return -1;
+		hexout->segoff = segoff;
+	}
+
+	if (hexout_write(hexout->file, hexout->len, addr_low,
+			 0, hexout->buf) < 0)
+		return -1;
+	hexout->len = 0;
+	return 0;
 }
 
 static int hexout_feed(struct hexout_data *hexout,
@@ -390,24 +393,22 @@ static int hexout_feed(struct hexout_data *hexout,
 	return 0;
 }
 
-static int cmd_hexout(cproc_t cp, char **arg)
+int cmd_hexout(char **arg)
 {
-	device_t dev = cproc_device(cp);
-	stab_t stab = cproc_stab(cp);
 	char *off_text = get_arg(arg);
 	char *len_text = get_arg(arg);
 	char *filename = *arg;
-	int off;
-	int length;
+	address_t off;
+	address_t length;
 	struct hexout_data hexout;
 
 	if (!(off_text && len_text && *filename)) {
-		fprintf(stderr, "hexout: need offset, length and filename\n");
+		printc_err("hexout: need offset, length and filename\n");
 		return -1;
 	}
 
-	if (expr_eval(stab, off_text, &off) < 0 ||
-	    expr_eval(stab, len_text, &length) < 0)
+	if (expr_eval(stab_default, off_text, &off) < 0 ||
+	    expr_eval(stab_default, len_text, &length) < 0)
 		return -1;
 
 	if (hexout_start(&hexout, filename) < 0)
@@ -420,9 +421,10 @@ static int cmd_hexout(cproc_t cp, char **arg)
 		if (count > sizeof(buf))
 			count = sizeof(buf);
 
-		printf("Reading %d bytes from 0x%04x...\n", count, off);
-		if (dev->readmem(dev, off, buf, count) < 0) {
-			perror("hexout: can't read memory");
+		printc("Reading %d bytes from 0x%04x...\n", count, off);
+		if (device_default->readmem(device_default,
+					    off, buf, count) < 0) {
+			pr_error("hexout: can't read memory");
 			goto fail;
 		}
 
@@ -436,7 +438,7 @@ static int cmd_hexout(cproc_t cp, char **arg)
 	if (hexout_flush(&hexout) < 0)
 		goto fail;
 	if (fclose(hexout.file) < 0) {
-		perror("hexout: error on close");
+		pr_error("hexout: error on close");
 		return -1;
 	}
 
@@ -449,40 +451,30 @@ fail:
 }
 
 struct prog_data {
-	device_t        dev;
-
 	uint8_t         buf[128];
-	uint16_t        addr;
+	address_t       addr;
 	int             len;
 	int             have_erased;
 };
-
-static void prog_init(struct prog_data *prog, device_t dev)
-{
-	prog->dev = dev;
-	prog->len = 0;
-	prog->have_erased = 0;
-}
 
 static int prog_flush(struct prog_data *prog)
 {
 	while (prog->len) {
 		int wlen = prog->len;
 
-		/* Writing across this address seems to cause a hang */
-		if (prog->addr < 0x999a && wlen + prog->addr > 0x999a)
-			wlen = 0x999a - prog->addr;
-
 		if (!prog->have_erased) {
-			printf("Erasing...\n");
-			if (prog->dev->ctl(prog->dev, DEVICE_CTL_ERASE) < 0)
+			printc("Erasing...\n");
+			if (device_default->ctl(device_default,
+						DEVICE_CTL_ERASE) < 0)
 				return -1;
+
+			printc("Programming...\n");
 			prog->have_erased = 1;
 		}
 
-		printf("Writing %3d bytes to %04x...\n", wlen, prog->addr);
-		if (prog->dev->writemem(prog->dev, prog->addr,
-					prog->buf, wlen) < 0)
+		printc_dbg("Writing %3d bytes to %04x...\n", wlen, prog->addr);
+		if (device_default->writemem(device_default, prog->addr,
+					     prog->buf, wlen) < 0)
 		        return -1;
 
 		memmove(prog->buf, prog->buf + wlen, prog->len - wlen);
@@ -494,7 +486,7 @@ static int prog_flush(struct prog_data *prog)
 }
 
 static int prog_feed(void *user_data,
-		     uint16_t addr, const uint8_t *data, int len)
+		     address_t addr, const uint8_t *data, int len)
 {
 	struct prog_data *prog = (struct prog_data *)user_data;
 
@@ -529,28 +521,26 @@ static int prog_feed(void *user_data,
 	return 0;
 }
 
-static int cmd_prog(cproc_t cp, char **arg)
+int cmd_prog(char **arg)
 {
-	device_t dev = cproc_device(cp);
-	stab_t stab = cproc_stab(cp);
 	FILE *in;
 	struct prog_data prog;
 
-	if (cproc_prompt_abort(cp, CPROC_MODIFY_SYMS))
+	if (prompt_abort(MODIFY_SYMS))
 		return 0;
 
 	in = fopen(*arg, "r");
 	if (!in) {
-		fprintf(stderr, "prog: %s: %s\n", *arg, strerror(errno));
+		printc_err("prog: %s: %s\n", *arg, strerror(errno));
 		return -1;
 	}
 
-	if (dev->ctl(dev, DEVICE_CTL_HALT) < 0) {
+	if (device_default->ctl(device_default, DEVICE_CTL_HALT) < 0) {
 		fclose(in);
 		return -1;
 	}
 
-	prog_init(&prog, dev);
+	memset(&prog, 0, sizeof(prog));
 
 	if (binfile_extract(in, prog_feed, &prog) < 0) {
 		fclose(in);
@@ -558,8 +548,8 @@ static int cmd_prog(cproc_t cp, char **arg)
 	}
 
 	if (binfile_info(in) & BINFILE_HAS_SYMS) {
-		stab_clear(stab);
-		binfile_syms(in, stab);
+		stab_clear(stab_default);
+		binfile_syms(in, stab_default);
 	}
 
 	fclose(in);
@@ -567,220 +557,104 @@ static int cmd_prog(cproc_t cp, char **arg)
 	if (prog_flush(&prog) < 0)
 		return -1;
 
-	if (dev->ctl(dev, DEVICE_CTL_RESET) < 0) {
-		fprintf(stderr, "prog: failed to reset after programming\n");
+	if (device_default->ctl(device_default, DEVICE_CTL_RESET) < 0) {
+		printc_err("prog: failed to reset after programming\n");
 		return -1;
 	}
 
-	cproc_unmodify(cp, CPROC_MODIFY_SYMS);
+	unmark_modified(MODIFY_SYMS);
 	return 0;
 }
 
-static int cmd_setbreak(cproc_t cp, char **arg)
+int cmd_setbreak(char **arg)
 {
-	device_t dev = cproc_device(cp);
-	stab_t stab = cproc_stab(cp);
 	char *addr_text = get_arg(arg);
 	char *index_text = get_arg(arg);
 	int index = -1;
-	int addr;
+	address_t addr;
 
 	if (!addr_text) {
-		fprintf(stderr, "setbreak: address required\n");
+		printc_err("setbreak: address required\n");
 		return -1;
 	}
 
-	if (expr_eval(stab, addr_text, &addr) < 0) {
-		fprintf(stderr, "setbreak: invalid address\n");
+	if (expr_eval(stab_default, addr_text, &addr) < 0) {
+		printc_err("setbreak: invalid address\n");
 		return -1;
 	}
 
 	if (index_text) {
 		index = atoi(index_text);
 
-		if (index < 0 || index >= dev->max_breakpoints) {
-			fprintf(stderr, "setbreak: invalid breakpoint "
+		if (index < 0 || index >= device_default->max_breakpoints) {
+			printc_err("setbreak: invalid breakpoint "
 				"slot: %d\n", index);
 			return -1;
 		}
 	}
 
-	index = device_setbrk(dev, index, 1, addr);
+	index = device_setbrk(device_default, index, 1, addr);
 	if (index < 0) {
-		fprintf(stderr, "setbreak: all breakpoint slots are "
+		printc_err("setbreak: all breakpoint slots are "
 			"occupied\n");
 		return -1;
 	}
 
-	printf("Set breakpoint %d\n", index);
+	printc("Set breakpoint %d\n", index);
 	return 0;
 }
 
-static int cmd_delbreak(cproc_t cp, char **arg)
+int cmd_delbreak(char **arg)
 {
-	device_t dev = cproc_device(cp);
 	char *index_text = get_arg(arg);
 	int ret = 0;
 
 	if (index_text) {
 		int index = atoi(index_text);
 
-		if (index < 0 || index >= dev->max_breakpoints) {
-			fprintf(stderr, "delbreak: invalid breakpoint "
+		if (index < 0 || index >= device_default->max_breakpoints) {
+			printc_err("delbreak: invalid breakpoint "
 				"slot: %d\n", index);
 			return -1;
 		}
 
-		printf("Clearing breakpoint %d\n", index);
-		device_setbrk(dev, index, 0, 0);
+		printc("Clearing breakpoint %d\n", index);
+		device_setbrk(device_default, index, 0, 0);
 	} else {
 		int i;
 
-		printf("Clearing all breakpoints...\n");
-		for (i = 0; i < dev->max_breakpoints; i++)
-			device_setbrk(dev, i, 0, 0);
+		printc("Clearing all breakpoints...\n");
+		for (i = 0; i < device_default->max_breakpoints; i++)
+			device_setbrk(device_default, i, 0, 0);
 	}
 
 	return ret;
 }
 
-static int cmd_break(cproc_t cp, char **arg)
+int cmd_break(char **arg)
 {
-	device_t dev = cproc_device(cp);
-	stab_t stab = cproc_stab(cp);
 	int i;
 
-	printf("%d breakpoints available:\n", dev->max_breakpoints);
-	for (i = 0; i < dev->max_breakpoints; i++) {
-		const struct device_breakpoint *bp = &dev->breakpoints[i];
+	printc("%d breakpoints available:\n", device_default->max_breakpoints);
+	for (i = 0; i < device_default->max_breakpoints; i++) {
+		const struct device_breakpoint *bp =
+			&device_default->breakpoints[i];
 
 		if (bp->flags & DEVICE_BP_ENABLED) {
 			char name[128];
-			uint16_t offset;
+			address_t offset;
 
-			printf("    %d. 0x%04x", i, bp->addr);
-			if (!stab_nearest(stab, bp->addr, name,
+			printc("    %d. 0x%05x", i, bp->addr);
+			if (!stab_nearest(stab_default, bp->addr, name,
 					  sizeof(name), &offset)) {
-				printf(" (%s", name);
+				printc(" (%s", name);
 				if (offset)
-					printf("+0x%x", offset);
-				printf(")");
+					printc("+0x%x", offset);
+				printc(")");
 			}
-			printf("\n");
+			printc("\n");
 		}
 	}
 
 	return 0;
-}
-
-static const struct cproc_command commands[] = {
-	{
-		.name = "setbreak",
-		.func = cmd_setbreak,
-		.help =
-"setbreak <addr> [index]\n"
-"    Set a breakpoint. If no index is specified, the first available\n"
-"    slot will be used.\n"
-	},
-	{
-		.name = "delbreak",
-		.func = cmd_delbreak,
-		.help =
-"delbreak [index]\n"
-"    Delete a breakpoint. If no index is specified, then all active\n"
-"    breakpoints are cleared.\n"
-	},
-	{
-		.name = "break",
-		.func = cmd_break,
-		.help =
-"break\n"
-"    List active breakpoints.\n"
-	},
-	{
-		.name = "regs",
-		.func = cmd_regs,
-		.help =
-"regs\n"
-"    Read and display the current register contents.\n"
-	},
-	{
-		.name = "prog",
-		.func = cmd_prog,
-		.help =
-"prog <filename>\n"
-"    Erase the device and flash the data contained in a binary file.\n"
-"    This command also loads symbols from the file, if available.\n"
-	},
-	{
-		.name = "md",
-		.func = cmd_md,
-		.help =
-"md <address> [length]\n"
-"    Read the specified number of bytes from memory at the given\n"
-"    address, and display a hexdump.\n"
-	},
-	{
-		.name = "mw",
-		.func = cmd_mw,
-		.help =
-"mw <address> bytes ...\n"
-"    Write a sequence of bytes to a memory address. Byte values are\n"
-"    two-digit hexadecimal numbers.\n"
-	},
-	{
-		.name = "reset",
-		.func = cmd_reset,
-		.help =
- "reset\n"
- "    Reset (and halt) the CPU.\n"
-	},
-	{
-		.name = "erase",
-		.func = cmd_erase,
-		.help =
-"erase\n"
-"    Erase the device under test.\n"
-	},
-	{
-		.name = "step",
-		.func = cmd_step,
-		.help =
-"step [count]\n"
-"    Single-step the CPU, and display the register state.\n"
-	},
-	{
-		.name = "run",
-		.func = cmd_run,
-		.help =
-"run\n"
-"    Run the CPU to until a breakpoint is reached or the command is\n"
-"    interrupted.\n"
-	},
-	{
-		.name = "set",
-		.func = cmd_set,
-		.help =
-"set <register> <value>\n"
-"    Change the value of a CPU register.\n"
-	},
-	{
-		.name = "dis",
-		.func = cmd_dis,
-		.help =
-"dis <address> [length]\n"
-"    Disassemble a section of memory.\n"
-	},
-	{
-		.name = "hexout",
-		.func = cmd_hexout,
-		.help =
-"hexout <address> <length> <filename.hex>\n"
-"    Save a region of memory into a HEX file.\n"
-	}
-};
-
-int devcmd_register(cproc_t cp)
-{
-	return cproc_register_commands(cp, commands, ARRAY_LEN(commands));
 }

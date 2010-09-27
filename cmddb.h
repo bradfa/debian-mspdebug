@@ -16,21 +16,27 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef CPROC_UTIL_H_
-#define CPROC_UTIL_H_
+#ifndef CMDDB_H_
+#define CMDDB_H_
 
-#include <stdint.h>
-#include "cproc.h"
+typedef int (*cmddb_func_t)(char **arg);
 
-/* Print colorized disassembly on command processor standard output */
-void cproc_disassemble(cproc_t cp, uint16_t addr,
-		       const uint8_t *buf, int len);
+struct cmddb_record {
+	const char		*name;
+        cmddb_func_t            func;
+	const char		*help;
+};
 
-/* Print colorized hexdump on standard output */
-void cproc_hexdump(cproc_t cp, uint16_t addr,
-		   const uint8_t *buf, int len);
+/* Fetch a command record */
+int cmddb_get(const char *name, struct cmddb_record *r);
 
-/* Colorized register dump */
-void cproc_regs(cproc_t cp, const uint16_t *regs);
+/* Enumerate all command records.
+ *
+ * Returns 0, or -1 if an error occurs during enumeration.
+ */
+typedef int (*cmddb_enum_func_t)(void *user_data,
+				 const struct cmddb_record *r);
+
+int cmddb_enum(cmddb_enum_func_t func, void *user_data);
 
 #endif

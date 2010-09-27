@@ -19,9 +19,7 @@
 #ifndef RTOOLS_H_
 #define RTOOLS_H_
 
-#include "cproc.h"
-
-/* Register reverse-engineering tool commands. */
-int rtools_register(cproc_t cp);
+int cmd_isearch(char **arg);
+int cmd_cgraph(char **arg);
 
 #endif

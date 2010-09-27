@@ -18,6 +18,7 @@
 CC = gcc
 INSTALL = /usr/bin/install
 PREFIX ?= /usr/local
+LDFLAGS ?= -s
 
 ifdef WITHOUT_READLINE
 	READLINE_CFLAGS =
@@ -48,15 +49,16 @@ clean:
 install: mspdebug mspdebug.man
 	mkdir -p $(DESTDIR)$(PREFIX)/bin
 	mkdir -p $(DESTDIR)$(PREFIX)/share/man/man1
-	$(INSTALL) -m 0755 -s mspdebug $(DESTDIR)$(PREFIX)/bin/mspdebug
+	$(INSTALL) -m 0755 mspdebug $(DESTDIR)$(PREFIX)/bin/mspdebug
 	$(INSTALL) -m 0644 mspdebug.man $(DESTDIR)$(PREFIX)/share/man/man1/mspdebug.1
 
 .SUFFIXES: .c .o
 
 mspdebug: main.o fet.o rf2500.o dis.o uif.o olimex.o ihex.o elf32.o stab.o \
           util.o bsl.o sim.o symmap.o gdb.o btree.o rtools.o sym.o devcmd.o \
-	  cproc.o vector.o cproc_util.o expr.o fet_error.o binfile.o fet_db.o \
-	  usbutil.o titext.o srec.o device.o coff.o
+	  reader.o vector.o output_util.o expr.o fet_error.o binfile.o \
+	  fet_db.o usbutil.o titext.o srec.o device.o coff.o opdb.o output.o \
+	  cmddb.o stdcmd.o
 	$(CC) $(LDFLAGS) $(MACPORTS_LDFLAGS) -o $@ $^ -lusb $(READLINE_LIBS)
 
 .c.o:

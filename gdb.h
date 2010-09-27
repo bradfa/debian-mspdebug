@@ -19,9 +19,6 @@
 #ifndef GDB_H_
 #define GDB_H_
 
-#include "cproc.h"
-
-/* Register the "gdb" command */
-int gdb_register(cproc_t cp);
+int cmd_gdb(char **arg);
 
 #endif

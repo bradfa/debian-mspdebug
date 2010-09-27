@@ -29,9 +29,12 @@
 #include <arpa/inet.h>
 #include "device.h"
 #include "util.h"
+#include "opdb.h"
 #include "gdb.h"
+#include "output.h"
+#include "reader.h"
 
-#define MAX_MEM_XFER    1024
+#define MAX_MEM_XFER    8192
 
 /************************************************************************
  * GDB IO routines
@@ -47,8 +50,6 @@ struct gdb_data {
 
 	char            outbuf[MAX_MEM_XFER * 2 + 64];
 	int             outlen;
-
-	device_t        device;
 };
 
 static void gdb_printf(struct gdb_data *data, const char *fmt, ...)
@@ -79,7 +80,7 @@ static int gdb_read(struct gdb_data *data, int blocking)
 
 	if (select(data->sock + 1, &r, NULL, NULL,
 		   blocking ? NULL : &to) < 0) {
-		perror("gdb: select");
+		pr_error("gdb: select");
 		return -1;
 	}
 
@@ -90,12 +91,12 @@ static int gdb_read(struct gdb_data *data, int blocking)
 
 	if (len < 0) {
 		data->error = errno;
-		perror("gdb: recv");
+		pr_error("gdb: recv");
 		return -1;
 	}
 
 	if (!len) {
-		printf("Connection closed\n");
+		printc("Connection closed\n");
 		return -1;
 	}
 
@@ -130,7 +131,7 @@ static int gdb_flush(struct gdb_data *data)
 {
 	if (send(data->sock, data->outbuf, data->outlen, 0) < 0) {
 		data->error = errno;
-		perror("gdb: flush");
+		pr_error("gdb: flush");
 		return -1;
 	}
 
@@ -145,11 +146,11 @@ static int gdb_flush_ack(struct gdb_data *data)
 	do {
 		data->outbuf[data->outlen] = 0;
 #ifdef DEBUG_GDB
-		printf("-> %s\n", data->outbuf);
+		printc("-> %s\n", data->outbuf);
 #endif
 		if (send(data->sock, data->outbuf, data->outlen, 0) < 0) {
 			data->error = errno;
-			perror("gdb: flush_ack");
+			pr_error("gdb: flush_ack");
 			return -1;
 		}
 
@@ -175,16 +176,6 @@ static void gdb_packet_end(struct gdb_data *data)
 	for (i = 1; i < data->outlen; i++)
 		c = (c + data->outbuf[i]) & 0xff;
 	gdb_printf(data, "#%02x", c);
-}
-
-static int gdb_send_hex(struct gdb_data *data, const char *text)
-{
-	gdb_packet_start(data);
-	while (*text)
-		gdb_printf(data, "%02x", *(text++));
-	gdb_packet_end(data);
-
-	return gdb_flush_ack(data);
 }
 
 static int hexval(int c)
@@ -213,11 +204,11 @@ static int gdb_send(struct gdb_data *data, const char *msg)
 
 static int read_registers(struct gdb_data *data)
 {
-	uint16_t regs[DEVICE_NUM_REGS];
+	address_t regs[DEVICE_NUM_REGS];
 	int i;
 
-	printf("Reading registers\n");
-	if (data->device->getregs(data->device, regs) < 0)
+	printc("Reading registers\n");
+	if (device_default->getregs(device_default, regs) < 0)
 		return gdb_send(data, "E00");
 
 	gdb_packet_start(data);
@@ -227,10 +218,37 @@ static int read_registers(struct gdb_data *data)
 	return gdb_flush_ack(data);
 }
 
+struct monitor_buf {
+	char    buf[MAX_MEM_XFER];
+	int     len;
+	int	trunc;
+};
+
+static void monitor_capture(void *user_data, const char *text)
+{
+	struct monitor_buf *mb = (struct monitor_buf *)user_data;
+	int len = strlen(text);
+
+	if (mb->trunc)
+		return;
+
+	if (mb->len + len + 64 > sizeof(mb->buf)) {
+		text = "...<truncated>";
+		len = strlen(text);
+		mb->trunc = 1;
+	}
+
+	memcpy(mb->buf + mb->len, text, len);
+	mb->len += len;
+	mb->buf[mb->len++] = '\n';
+}
+
 static int monitor_command(struct gdb_data *data, char *buf)
 {
 	char cmd[128];
 	int len = 0;
+	int i;
+	struct monitor_buf mbuf;
 
 	while (len + 1 < sizeof(cmd) && *buf && buf[1]) {
 		if (len + 1 >= sizeof(cmd))
@@ -241,30 +259,34 @@ static int monitor_command(struct gdb_data *data, char *buf)
 	}
 	cmd[len] = 0;
 
-	printf("Monitor command received: %s\n", cmd);
+	printc("Monitor command received: %s\n", cmd);
 
-	if (!strcasecmp(cmd, "reset")) {
-		printf("Resetting device\n");
-		if (data->device->ctl(data->device, DEVICE_CTL_RESET) < 0)
-			return gdb_send_hex(data, "Reset failed\n");
-	} else if (!strcasecmp(cmd, "erase")) {
-		printf("Erasing device\n");
-		if (data->device->ctl(data->device, DEVICE_CTL_ERASE) < 0)
-			return gdb_send_hex(data, "Erase failed\n");
-	}
+	mbuf.len = 0;
+	mbuf.trunc = 0;
+	capture_start(monitor_capture, &mbuf);
+	process_command(cmd);
+	capture_end();
 
-	return gdb_send(data, "OK");
+	if (!mbuf.len)
+		return gdb_send(data, "OK");
+
+	gdb_packet_start(data);
+	for (i = 0; i < mbuf.len; i++)
+		gdb_printf(data, "%02x", mbuf.buf[i]);
+	gdb_packet_end(data);
+
+	return gdb_flush_ack(data);
 }
 
 static int write_registers(struct gdb_data *data, char *buf)
 {
-	uint16_t regs[DEVICE_NUM_REGS];
+	address_t regs[DEVICE_NUM_REGS];
 	int i;
 
 	if (strlen(buf) < DEVICE_NUM_REGS * 4)
 		return gdb_send(data, "E00");
 
-	printf("Writing registers\n");
+	printc("Writing registers\n");
 	for (i = 0; i < DEVICE_NUM_REGS; i++) {
 		regs[i] = (hexval(buf[2]) << 12) |
 			(hexval(buf[3]) << 8) |
@@ -273,7 +295,7 @@ static int write_registers(struct gdb_data *data, char *buf)
 		buf += 4;
 	}
 
-	if (data->device->setregs(data->device, regs) < 0)
+	if (device_default->setregs(device_default, regs) < 0)
 		return gdb_send(data, "E00");
 
 	return gdb_send(data, "OK");
@@ -282,12 +304,12 @@ static int write_registers(struct gdb_data *data, char *buf)
 static int read_memory(struct gdb_data *data, char *text)
 {
 	char *length_text = strchr(text, ',');
-	int length, addr;
+	address_t length, addr;
 	uint8_t buf[MAX_MEM_XFER];
 	int i;
 
 	if (!length_text) {
-		fprintf(stderr, "gdb: malformed memory read request\n");
+		printc_err("gdb: malformed memory read request\n");
 		return gdb_send(data, "E00");
 	}
 
@@ -299,9 +321,9 @@ static int read_memory(struct gdb_data *data, char *text)
 	if (length > sizeof(buf))
 		length = sizeof(buf);
 
-	printf("Reading %d bytes from 0x%04x\n", length, addr);
+	printc("Reading %d bytes from 0x%04x\n", length, addr);
 
-	if (data->device->readmem(data->device, addr, buf, length) < 0)
+	if (device_default->readmem(device_default, addr, buf, length) < 0)
 		return gdb_send(data, "E00");
 
 	gdb_packet_start(data);
@@ -316,12 +338,12 @@ static int write_memory(struct gdb_data *data, char *text)
 {
 	char *data_text = strchr(text, ':');
 	char *length_text = strchr(text, ',');
-	int length, addr;
+	address_t length, addr;
 	uint8_t buf[MAX_MEM_XFER];
 	int buflen = 0;
 
 	if (!(data_text && length_text)) {
-		fprintf(stderr, "gdb: malformed memory write request\n");
+		printc_err("gdb: malformed memory write request\n");
 		return gdb_send(data, "E00");
 	}
 
@@ -338,13 +360,13 @@ static int write_memory(struct gdb_data *data, char *text)
 	}
 
 	if (buflen != length) {
-		fprintf(stderr, "gdb: length mismatch\n");
+		printc_err("gdb: length mismatch\n");
 		return gdb_send(data, "E00");
 	}
 
-	printf("Writing %d bytes to 0x%04x\n", buflen, addr);
+	printc("Writing %d bytes to 0x%04x\n", buflen, addr);
 
-	if (data->device->writemem(data->device, addr, buf, buflen) < 0)
+	if (device_default->writemem(device_default, addr, buf, buflen) < 0)
 		return gdb_send(data, "E00");
 
 	return gdb_send(data, "OK");
@@ -352,31 +374,42 @@ static int write_memory(struct gdb_data *data, char *text)
 
 static int run_set_pc(struct gdb_data *data, char *buf)
 {
-	uint16_t regs[DEVICE_NUM_REGS];
+	address_t regs[DEVICE_NUM_REGS];
 
 	if (!*buf)
 		return 0;
 
-	if (data->device->getregs(data->device, regs) < 0)
+	if (device_default->getregs(device_default, regs) < 0)
 		return -1;
 
 	regs[0] = strtoul(buf, NULL, 16);
-	return data->device->setregs(data->device, regs);
+	return device_default->setregs(device_default, regs);
 }
 
 static int run_final_status(struct gdb_data *data)
 {
-	uint16_t regs[DEVICE_NUM_REGS];
+	address_t regs[DEVICE_NUM_REGS];
 	int i;
 
-	if (data->device->getregs(data->device, regs) < 0)
+	if (device_default->getregs(device_default, regs) < 0)
 		return gdb_send(data, "E00");
 
 	gdb_packet_start(data);
 	gdb_printf(data, "T05");
-	for (i = 0; i < 16; i++)
-		gdb_printf(data, "%02x:%02x%02x;", i,
-			   regs[i] & 0xff, regs[i] >> 8);
+	for (i = 0; i < 16; i++) {
+		address_t value = regs[i];
+		int j;
+
+		/* NOTE: this only gives GDB the lower 16 bits of each
+		 *       register. It complains if we give the full data.
+		 */
+		gdb_printf(data, "%02x:", i);
+		for (j = 0; j < 2; j++) {
+			gdb_printf(data, "%02x", value & 0xff);
+			value >>= 8;
+		}
+		gdb_printf(data, ";");
+	}
 	gdb_packet_end(data);
 
 	return gdb_flush_ack(data);
@@ -384,10 +417,10 @@ static int run_final_status(struct gdb_data *data)
 
 static int single_step(struct gdb_data *data, char *buf)
 {
-	printf("Single stepping\n");
+	printc("Single stepping\n");
 
 	if (run_set_pc(data, buf) < 0 ||
-	    data->device->ctl(data->device, DEVICE_CTL_STEP) < 0)
+	    device_default->ctl(device_default, DEVICE_CTL_STEP) < 0)
 		gdb_send(data, "E00");
 
 	return run_final_status(data);
@@ -395,20 +428,20 @@ static int single_step(struct gdb_data *data, char *buf)
 
 static int run(struct gdb_data *data, char *buf)
 {
-	printf("Running\n");
+	printc("Running\n");
 
 	if (run_set_pc(data, buf) < 0 ||
-	    data->device->ctl(data->device, DEVICE_CTL_RUN) < 0)
+	    device_default->ctl(device_default, DEVICE_CTL_RUN) < 0)
 		return gdb_send(data, "E00");
 
 	for (;;) {
-		device_status_t status = data->device->poll(data->device);
+		device_status_t status = device_default->poll(device_default);
 
 		if (status == DEVICE_STATUS_ERROR)
 			return gdb_send(data, "E00");
 
 		if (status == DEVICE_STATUS_HALTED) {
-			printf("Target halted\n");
+			printc("Target halted\n");
 			goto out;
 		}
 
@@ -422,14 +455,14 @@ static int run(struct gdb_data *data, char *buf)
 				return -1;
 
 			if (c == 3) {
-				printf("Interrupted by gdb\n");
+				printc("Interrupted by gdb\n");
 				goto out;
 			}
 		}
 	}
 
  out:
-	if (data->device->ctl(data->device, DEVICE_CTL_HALT) < 0)
+	if (device_default->ctl(device_default, DEVICE_CTL_HALT) < 0)
 		return gdb_send(data, "E00");
 
 	return run_final_status(data);
@@ -439,7 +472,7 @@ static int set_breakpoint(struct gdb_data *data, int enable, char *buf)
 {
 	char *parts[2];
 	int type;
-	int addr;
+	address_t addr;
 	int i;
 
 	/* Break up the arguments */
@@ -448,21 +481,21 @@ static int set_breakpoint(struct gdb_data *data, int enable, char *buf)
 
 	/* Make sure there's a type argument */
 	if (!parts[0]) {
-		fprintf(stderr, "gdb: breakpoint requested with no type\n");
+		printc_err("gdb: breakpoint requested with no type\n");
 		return gdb_send(data, "E00");
 	}
 
 	/* We only support breakpoints */
 	type = atoi(parts[0]);
 	if (type < 0 || type > 1) {
-		fprintf(stderr, "gdb: unsupported breakpoint type: %s\n",
+		printc_err("gdb: unsupported breakpoint type: %s\n",
 			parts[0]);
 		return gdb_send(data, "");
 	}
 
 	/* There needs to be an address specified */
 	if (!parts[1]) {
-		fprintf(stderr, "gdb: breakpoint address missing\n");
+		printc_err("gdb: breakpoint address missing\n");
 		return gdb_send(data, "E00");
 	}
 
@@ -470,19 +503,27 @@ static int set_breakpoint(struct gdb_data *data, int enable, char *buf)
 	addr = strtoul(parts[1], NULL, 16);
 
 	if (enable) {
-		if (device_setbrk(data->device, -1, 1, addr) < 0) {
-			fprintf(stderr, "gdb: can't add breakpoint at "
+		if (device_setbrk(device_default, -1, 1, addr) < 0) {
+			printc_err("gdb: can't add breakpoint at "
 				"0x%04x\n", addr);
 			return gdb_send(data, "E00");
 		}
 
-		printf("Breakpoint set at 0x%04x\n", addr);
+		printc("Breakpoint set at 0x%04x\n", addr);
 	} else {
-		device_setbrk(data->device, -1, 0, addr);
-		printf("Breakpoint cleared at 0x%04x\n", addr);
+		device_setbrk(device_default, -1, 0, addr);
+		printc("Breakpoint cleared at 0x%04x\n", addr);
 	}
 
 	return gdb_send(data, "OK");
+}
+
+static int gdb_send_supported(struct gdb_data *data)
+{
+	gdb_packet_start(data);
+	gdb_printf(data, "PacketSize=%x", MAX_MEM_XFER * 2);
+	gdb_packet_end(data);
+	return gdb_flush_ack(data);
 }
 
 static int process_gdb_command(struct gdb_data *data, char *buf, int len)
@@ -504,6 +545,8 @@ static int process_gdb_command(struct gdb_data *data, char *buf, int len)
 	case 'q': /* Query */
 		if (!strncmp(buf, "qRcmd,", 6))
 			return monitor_command(data, buf + 6);
+		if (!strncmp(buf, "qSupported", 10))
+			return gdb_send_supported(data);
 		break;
 
 	case 'm': /* Read memory */
@@ -563,13 +606,13 @@ static void gdb_reader_loop(struct gdb_data *data)
 		cksum_recv = (cksum_recv << 4) | hexval(c);
 
 #ifdef DEBUG_GDB
-		printf("<- $%s#%02x\n", buf, cksum_recv);
+		printc("<- $%s#%02x\n", buf, cksum_recv);
 #endif
 
 		if (cksum_recv != cksum_calc) {
-			fprintf(stderr, "gdb: bad checksum (calc = 0x%02x, "
+			printc_err("gdb: bad checksum (calc = 0x%02x, "
 				"recv = 0x%02x)\n", cksum_calc, cksum_recv);
-			fprintf(stderr, "gdb: packet data was: %s\n", buf);
+			printc_err("gdb: packet data was: %s\n", buf);
 			gdb_printf(data, "-");
 			if (gdb_flush(data) < 0)
 				return;
@@ -586,7 +629,7 @@ static void gdb_reader_loop(struct gdb_data *data)
 	}
 }
 
-static int gdb_server(device_t device, int port)
+static int gdb_server(int port)
 {
 	int sock;
 	int client;
@@ -598,42 +641,42 @@ static int gdb_server(device_t device, int port)
 
 	sock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (sock < 0) {
-		perror("gdb: can't create socket");
+		pr_error("gdb: can't create socket");
 		return -1;
 	}
 
 	arg = 1;
 	if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &arg, sizeof(arg)) < 0)
-		perror("gdb: warning: can't reuse socket address");
+		pr_error("gdb: warning: can't reuse socket address");
 
 	addr.sin_family = AF_INET;
 	addr.sin_port = htons(port);
 	addr.sin_addr.s_addr = htonl(INADDR_ANY);
 	if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-		fprintf(stderr, "gdb: can't bind to port %d: %s\n",
+		printc_err("gdb: can't bind to port %d: %s\n",
 			port, strerror(errno));
 		close(sock);
 		return -1;
 	}
 
 	if (listen(sock, 1) < 0) {
-		perror("gdb: can't listen on socket");
+		pr_error("gdb: can't listen on socket");
 		close(sock);
 		return -1;
 	}
 
-	printf("Bound to port %d. Now waiting for connection...\n", port);
+	printc("Bound to port %d. Now waiting for connection...\n", port);
 
 	len = sizeof(addr);
 	client = accept(sock, (struct sockaddr *)&addr, &len);
 	if (client < 0) {
-		perror("gdb: failed to accept connection");
+		pr_error("gdb: failed to accept connection");
 		close(sock);
 		return -1;
 	}
 
 	close(sock);
-	printf("Client connected from %s:%d\n",
+	printc("Client connected from %s:%d\n",
 	       inet_ntoa(addr.sin_addr), htons(addr.sin_port));
 
 	data.sock = client;
@@ -641,63 +684,34 @@ static int gdb_server(device_t device, int port)
 	data.head = 0;
 	data.tail = 0;
 	data.outlen = 0;
-	data.device = device;
 
 	/* Put the hardware breakpoint setting into a known state. */
-	printf("Clearing all breakpoints...\n");
-	for (i = 0; i < device->max_breakpoints; i++)
-		device_setbrk(device, i, 0, 0);
+	printc("Clearing all breakpoints...\n");
+	for (i = 0; i < device_default->max_breakpoints; i++)
+		device_setbrk(device_default, i, 0, 0);
 
 	gdb_reader_loop(&data);
 
 	return data.error ? -1 : 0;
 }
 
-static int cmd_gdb(cproc_t cp, char **arg)
+int cmd_gdb(char **arg)
 {
 	char *port_text = get_arg(arg);
 	int port = 2000;
-	int want_loop = 0;
-
-	cproc_get_int(cp, "gdb_loop", &want_loop);
 
 	if (port_text)
 		port = atoi(port_text);
 
 	if (port <= 0 || port > 65535) {
-		fprintf(stderr, "gdb: invalid port: %d\n", port);
+		printc_err("gdb: invalid port: %d\n", port);
 		return -1;
 	}
 
 	do {
-		if (gdb_server(cproc_device(cp), port) < 0)
+		if (gdb_server(port) < 0)
 			return -1;
-	} while (want_loop);
+	} while (opdb_get_boolean("gdb_loop"));
 
 	return 0;
-}
-
-static const struct cproc_command command_gdb = {
-	.name = "gdb",
-	.func = cmd_gdb,
-	.help =
-	"gdb [port]\n"
-	"    Run a GDB remote stub on the given TCP/IP port.\n"
-};
-
-static const struct cproc_option option_gdb = {
-	.name = "gdb_loop",
-	.type = CPROC_OPTION_BOOL,
-	.help =
-"Automatically restart the GDB server after disconnection. If this\n"
-"option is set, then the GDB server keeps running until an error occurs,\n"
-"or the user interrupts with Ctrl+C.\n"
-};
-
-int gdb_register(cproc_t cp)
-{
-	if (cproc_register_options(cp, &option_gdb, 1) < 0)
-		return -1;
-
-	return cproc_register_commands(cp, &command_gdb, 1);
 }

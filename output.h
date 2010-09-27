@@ -16,15 +16,31 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef EXPR_H_
-#define EXPR_H_
+#ifndef OUTPUT_H_
+#define OUTPUT_H_
 
-#include <stdint.h>
-#include "stab.h"
-
-/* Parse an address expression, storing the result in the integer
- * pointed to. Returns 0 if parsed successfully, -1 if not.
+/* Print output. ANSI colour codes may be embedded, and these will be
+ * stripped on output if colour output is disabled.
+ *
+ * Returns the number of characters printed (not including colour
+ * codes).
  */
-int expr_eval(stab_t stab, const char *text, address_t *value);
+int printc(const char *fmt, ...);
+int printc_dbg(const char *fmt, ...);
+int printc_err(const char *fmt, ...);
+
+void pr_error(const char *prefix);
+
+/* Capture output. Capturing is started by calling capture_begin() with
+ * a callback function. The callback is invoked for each line of output
+ * printed to either stdout or stderr (output still goes to
+ * stdout/stderr as well).
+ *
+ * Capture is ended by calling capture_end().
+ */
+typedef void (*capture_func_t)(void *user_data, const char *text);
+
+void capture_start(capture_func_t, void *user_data);
+void capture_end(void);
 
 #endif

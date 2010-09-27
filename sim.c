@@ -23,6 +23,7 @@
 #include "device.h"
 #include "dis.h"
 #include "util.h"
+#include "output.h"
 #include "sim.h"
 
 #define MEM_SIZE	65536
@@ -256,7 +257,7 @@ static int step_double(struct sim_device *dev, uint16_t ins)
 		break;
 
 	default:
-		fprintf(stderr, "sim: invalid double-operand opcode: "
+		printc_err("sim: invalid double-operand opcode: "
 			"0x%04x (PC = 0x%04x)\n",
 			opcode, dev->current_insn);
 		return -1;
@@ -343,7 +344,7 @@ static int step_single(struct sim_device *dev, uint16_t ins)
 		break;
 
 	default:
-		fprintf(stderr, "sim: unknown single-operand opcode: 0x%04x "
+		printc_err("sim: unknown single-operand opcode: 0x%04x "
 			"(PC = 0x%04x)\n", opcode, dev->current_insn);
 		return -1;
 	}
@@ -440,10 +441,16 @@ static void sim_destroy(device_t dev_base)
 	free(dev_base);
 }
 
-static int sim_readmem(device_t dev_base, uint16_t addr,
-		       uint8_t *mem, int len)
+static int sim_readmem(device_t dev_base, address_t addr,
+		       uint8_t *mem, address_t len)
 {
 	struct sim_device *dev = (struct sim_device *)dev_base;
+
+	if (addr > MEM_SIZE || (addr + len) < addr ||
+	    (addr + len) > MEM_SIZE) {
+		printc_err("sim: memory read out of range\n");
+		return -1;
+	}
 
 	if (addr + len > MEM_SIZE)
 		len = MEM_SIZE - addr;
@@ -452,31 +459,38 @@ static int sim_readmem(device_t dev_base, uint16_t addr,
 	return 0;
 }
 
-static int sim_writemem(device_t dev_base, uint16_t addr,
-			const uint8_t *mem, int len)
+static int sim_writemem(device_t dev_base, address_t addr,
+			const uint8_t *mem, address_t len)
 {
 	struct sim_device *dev = (struct sim_device *)dev_base;
 
-	if (addr + len > MEM_SIZE)
-		len = MEM_SIZE - addr;
+	if (addr > MEM_SIZE || (addr + len) < addr ||
+	    (addr + len) > MEM_SIZE) {
+		printc_err("sim: memory write out of range\n");
+		return -1;
+	}
 
 	memcpy(dev->memory + addr, mem, len);
 	return 0;
 }
 
-static int sim_getregs(device_t dev_base, uint16_t *regs)
+static int sim_getregs(device_t dev_base, address_t *regs)
 {
 	struct sim_device *dev = (struct sim_device *)dev_base;
+	int i;
 
-	memcpy(regs, dev->regs, sizeof(dev->regs));
+	for (i = 0; i < DEVICE_NUM_REGS; i++)
+		regs[i] = dev->regs[i];
 	return 0;
 }
 
-static int sim_setregs(device_t dev_base, const uint16_t *regs)
+static int sim_setregs(device_t dev_base, const address_t *regs)
 {
 	struct sim_device *dev = (struct sim_device *)dev_base;
+	int i;
 
-	memcpy(dev->regs, regs, sizeof(dev->regs));
+	for (i = 0; i < DEVICE_NUM_REGS; i++)
+		dev->regs[i] = regs[i];
 	return 0;
 }
 
@@ -533,7 +547,7 @@ static device_status_t sim_poll(device_t dev_base)
 		}
 
 		if (dev->regs[MSP430_REG_SR] & MSP430_SR_CPUOFF) {
-			printf("CPU disabled\n");
+			printc("CPU disabled\n");
 			dev->running = 0;
 			return DEVICE_STATUS_HALTED;
 		}
@@ -559,7 +573,7 @@ device_t sim_open(sim_fetch_func_t fetch_func,
 	struct sim_device *dev = malloc(sizeof(*dev));
 
 	if (!dev) {
-		perror("can't allocate memory for simulation");
+		pr_error("can't allocate memory for simulation");
 		return NULL;
 	}
 
@@ -584,6 +598,6 @@ device_t sim_open(sim_fetch_func_t fetch_func,
 	dev->running = 0;
 	dev->current_insn = 0;
 
-	printf("Simulation started, 0x%x bytes of RAM\n", MEM_SIZE);
+	printc_dbg("Simulation started, 0x%x bytes of RAM\n", MEM_SIZE);
 	return (device_t)dev;
 }

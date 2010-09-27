@@ -27,26 +27,27 @@
 #include "expr.h"
 #include "stab.h"
 #include "util.h"
+#include "output.h"
 
 /************************************************************************
  * Address expression parsing.
  */
 
 struct addr_exp_state {
-	int     last_operator;
-	int     data_stack[32];
-	int     data_stack_size;
-	int     op_stack[32];
-	int     op_stack_size;
+	int            last_operator;
+	address_t      data_stack[32];
+	int            data_stack_size;
+	int            op_stack[32];
+	int            op_stack_size;
 };
 
 static int addr_exp_data(stab_t stab,
 			 struct addr_exp_state *s, const char *text)
 {
-	int value;
+	address_t value;
 
 	if (!s->last_operator || s->last_operator == ')') {
-		fprintf(stderr, "syntax error at token %s\n", text);
+		printc_err("syntax error at token %s\n", text);
 		return -1;
 	}
 
@@ -56,12 +57,12 @@ static int addr_exp_data(stab_t stab,
 	else if (isdigit(*text))
 		value = atoi(text);
 	else if (stab_get(stab, text, &value) < 0) {
-		fprintf(stderr, "can't parse token: %s\n", text);
+		printc_err("can't parse token: %s\n", text);
 		return -1;
 	}
 
 	if (s->data_stack_size + 1 > ARRAY_LEN(s->data_stack)) {
-		fprintf(stderr, "data stack overflow at token %s\n", text);
+		printc_err("data stack overflow at token %s\n", text);
 		return -1;
 	}
 
@@ -73,10 +74,9 @@ static int addr_exp_data(stab_t stab,
 static int addr_exp_pop(struct addr_exp_state *s)
 {
 	char op = s->op_stack[--s->op_stack_size];
-	int data1 = s->data_stack[--s->data_stack_size];
-	int data2 = 0;
-
-	int result = 0;
+	address_t data1 = s->data_stack[--s->data_stack_size];
+	address_t data2 = 0;
+	address_t result = 0;
 
 	if (op != 'N')
 		data2 = s->data_stack[--s->data_stack_size];
@@ -118,7 +118,7 @@ static int addr_exp_pop(struct addr_exp_state *s)
 	return 0;
 
  divzero:
-	fprintf(stderr, "divide by zero\n");
+	printc_err("divide by zero\n");
 	return -1;
 }
 
@@ -171,7 +171,7 @@ static int addr_exp_op(struct addr_exp_state *s, char op)
 				return -1;
 
 		if (!s->op_stack_size) {
-			fprintf(stderr, "parenthesis mismatch: )\n");
+			printc_err("parenthesis mismatch: )\n");
 			return -1;
 		}
 
@@ -182,7 +182,7 @@ static int addr_exp_op(struct addr_exp_state *s, char op)
 				return -1;
 
 		if (s->op_stack_size + 1 > ARRAY_LEN(s->op_stack)) {
-			fprintf(stderr, "operator stack overflow: %c\n", op);
+			printc_err("operator stack overflow: %c\n", op);
 			return -1;
 		}
 
@@ -193,20 +193,20 @@ static int addr_exp_op(struct addr_exp_state *s, char op)
 	return 0;
 
  syntax_error:
-	fprintf(stderr, "syntax error at operator %c\n", op);
+	printc_err("syntax error at operator %c\n", op);
 	return -1;
 }
 
-static int addr_exp_finish(struct addr_exp_state *s, int *ret)
+static int addr_exp_finish(struct addr_exp_state *s, address_t *ret)
 {
 	if (s->last_operator && s->last_operator != ')') {
-		fprintf(stderr, "syntax error at end of expression\n");
+		printc_err("syntax error at end of expression\n");
 		return -1;
 	}
 
 	while (s->op_stack_size) {
 		if (s->op_stack[s->op_stack_size - 1] == '(') {
-			fprintf(stderr, "parenthesis mismatch: (\n");
+			printc_err("parenthesis mismatch: (\n");
 			return -1;
 		}
 
@@ -215,7 +215,7 @@ static int addr_exp_finish(struct addr_exp_state *s, int *ret)
 	}
 
 	if (s->data_stack_size != 1) {
-		fprintf(stderr, "no data: stack size is %d\n",
+		printc_err("no data: stack size is %d\n",
 			s->data_stack_size);
 		return -1;
 	}
@@ -226,7 +226,7 @@ static int addr_exp_finish(struct addr_exp_state *s, int *ret)
 	return 0;
 }
 
-int expr_eval(stab_t stab, const char *text, int *addr)
+int expr_eval(stab_t stab, const char *text, address_t *addr)
 {
 	const char *text_save = text;
 	int last_cc = 1;
@@ -251,7 +251,7 @@ int expr_eval(stab_t stab, const char *text, int *addr)
 			 *text == '$' || *text == ':')
 			cc = 3;
 		else {
-			fprintf(stderr, "illegal character in expression: %c\n",
+			printc_err("illegal character in expression: %c\n",
 				*text);
 			return -1;
 		}
@@ -287,6 +287,6 @@ int expr_eval(stab_t stab, const char *text, int *addr)
 	return 0;
 
  fail:
-	fprintf(stderr, "bad address expression: %s\n", text_save);
+	printc_err("bad address expression: %s\n", text_save);
 	return -1;
 }

@@ -35,6 +35,9 @@
 #include "sym.h"
 #include "devcmd.h"
 #include "expr.h"
+#include "opdb.h"
+#include "reader.h"
+#include "output.h"
 
 #include "sim.h"
 #include "bsl.h"
@@ -46,25 +49,25 @@
 #include "olimex.h"
 #include "rf2500.h"
 
-static void io_prefix(stab_t stab,
-		      const char *prefix, uint16_t pc,
+static void io_prefix(const char *prefix, uint16_t pc,
 		      uint16_t addr, int is_byte)
 {
 	char name[64];
+	address_t offset;
 
-	if (!stab_nearest(stab, pc, name, sizeof(name), &pc)) {
+	if (!stab_nearest(stab_default, pc, name, sizeof(name), &offset)) {
 		printf("%s", name);
-		if (pc)
-			printf("+0x%x", pc);
+		if (offset)
+			printf("+0x%x", offset);
 	} else {
 		printf("0x%04x", pc);
 	}
 
 	printf(": IO %s.%c: 0x%04x", prefix, is_byte ? 'B' : 'W', addr);
-	if (!stab_nearest(stab, addr, name, sizeof(name), &addr)) {
+	if (!stab_nearest(stab_default, addr, name, sizeof(name), &offset)) {
 		printf(" (%s", name);
-		if (addr)
-			printf("+0x%x", addr);
+		if (offset)
+			printf("+0x%x", offset);
 		printf(")");
 	}
 }
@@ -72,14 +75,12 @@ static void io_prefix(stab_t stab,
 static int fetch_io(void *user_data, uint16_t pc,
 		    uint16_t addr, int is_byte, uint16_t *data_ret)
 {
-	stab_t stab = (stab_t)user_data;
-
-	io_prefix(stab, "READ", pc, addr, is_byte);
+	io_prefix("READ", pc, addr, is_byte);
 
 	for (;;) {
 		char text[128];
 		int len;
-		int data;
+		address_t data;
 
 		printf("? ");
 		fflush(stdout);
@@ -96,7 +97,7 @@ static int fetch_io(void *user_data, uint16_t pc,
 		if (!len)
 			return 0;
 
-		if (!expr_eval(stab, text, &data)) {
+		if (!expr_eval(stab_default, text, &data)) {
 			if (data_ret)
 				*data_ret = data;
 			return 0;
@@ -109,9 +110,7 @@ static int fetch_io(void *user_data, uint16_t pc,
 static void store_io(void *user_data, uint16_t pc,
 		     uint16_t addr, int is_byte, uint16_t data)
 {
-	stab_t stab = (stab_t)user_data;
-
-	io_prefix(stab, "WRITE", pc, addr, is_byte);
+	io_prefix("WRITE", pc, addr, is_byte);
 
 	if (is_byte)
 		printf(" => 0x%02x\n", data & 0xff);
@@ -125,9 +124,9 @@ struct cmdline_args {
 	const char      *usb_device;
 	const char      *fet_force_id;
 	int             want_jtag;
+	int		no_reset;
 	int             no_rc;
 	int             vcc_mv;
-	stab_t          stab;
 };
 
 struct driver {
@@ -143,6 +142,8 @@ static device_t driver_open_fet(const struct cmdline_args *args,
 
 	if (!args->want_jtag)
 		flags |= FET_PROTO_SPYBIWIRE;
+	if (args->no_reset)
+		flags |= FET_PROTO_NORESET;
 
 	dev = fet_open(trans, flags, args->vcc_mv, args->fet_force_id);
 	if (!dev) {
@@ -158,7 +159,7 @@ static device_t driver_open_rf2500(const struct cmdline_args *args)
 	transport_t trans;
 
 	if (args->serial_device) {
-		fprintf(stderr, "This driver does not support tty devices.\n");
+		printc_err("This driver does not support tty devices.\n");
 		return NULL;
 	}
 
@@ -186,7 +187,7 @@ static device_t driver_open_olimex(const struct cmdline_args *args)
 
 static device_t driver_open_sim(const struct cmdline_args *args)
 {
-	return sim_open(fetch_io, store_io, args->stab);
+	return sim_open(fetch_io, store_io, NULL);
 }
 
 static device_t driver_open_uif(const struct cmdline_args *args)
@@ -194,8 +195,8 @@ static device_t driver_open_uif(const struct cmdline_args *args)
 	transport_t trans;
 
 	if (!args->serial_device) {
-		fprintf(stderr,	"This driver does not support USB access. "
-			"Specify a tty device using -d.\n");
+		printc_err("This driver does not support USB access. "
+			   "Specify a tty device using -d.\n");
 		return NULL;
 	}
 
@@ -209,8 +210,8 @@ static device_t driver_open_uif(const struct cmdline_args *args)
 static device_t driver_open_uif_bsl(const struct cmdline_args *args)
 {
 	if (!args->serial_device) {
-		fprintf(stderr,	"This driver does not support USB access. "
-			"Specify a tty device using -d.\n");
+		printc_err("This driver does not support USB access. "
+			   "Specify a tty device using -d.\n");
 		return NULL;
 	}
 
@@ -245,13 +246,24 @@ static const struct driver driver_table[] = {
 	}
 };
 
+static void version(void)
+{
+	printc(
+"MSPDebug version 0.11 - debugging tool for MSP430 MCUs\n"
+"Copyright (C) 2009, 2010 Daniel Beer <daniel@tortek.co.nz>\n"
+"This is free software; see the source for copying conditions.  There is NO\n"
+"warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR "
+"PURPOSE.\n");
+}
+
 static void usage(const char *progname)
 {
 	int i;
 
-	fprintf(stderr,
-"Usage: %s [options] <driver> [command ...]\n"
+	printc_err("Usage: %s [options] <driver> [command ...]\n"
 "\n"
+"    -q\n"
+"        Start in quiet mode.\n"
 "    -d device\n"
 "        Connect via the given tty device, rather than USB.\n"
 "    -U bus:dev\n"
@@ -262,6 +274,8 @@ static void usage(const char *progname)
 "        Set the supply voltage, in millivolts.\n"
 "    -n\n"
 "        Do not read ~/.mspdebug on startup.\n"
+"    --no-reset\n"
+"        Do not reset the device on startup.\n"
 "    --help\n"
 "        Show this help text.\n"
 "    --fet-list\n"
@@ -270,6 +284,8 @@ static void usage(const char *progname)
 "        Override the device ID returned by the FET.\n"
 "    --usb-list\n"
 "        Show a list of available USB devices.\n"
+"    --version\n"
+"        Show copyright and version information.\n"
 "\n"
 "Most drivers connect by default via USB, unless told otherwise via the\n"
 "-d option. By default, the first USB device found is opened.\n"
@@ -278,15 +294,15 @@ static void usage(const char *progname)
 "command reader is started.\n\n",
 		progname);
 
-	printf("Available drivers are:\n");
+	printc("Available drivers are:\n");
 	for (i = 0; i < ARRAY_LEN(driver_table); i++) {
 		const struct driver *drv = &driver_table[i];
 
-		printf("    %s\n        %s\n", drv->name, drv->help);
+		printc("    %s\n        %s\n", drv->name, drv->help);
 	}
 }
 
-static void process_rc_file(cproc_t cp)
+static void process_rc_file(void)
 {
 	const char *home = getenv("HOME");
 	char text[256];
@@ -296,7 +312,7 @@ static void process_rc_file(cproc_t cp)
 
 	snprintf(text, sizeof(text), "%s/.mspdebug", home);
 	if (!access(text, F_OK))
-		cproc_process_file(cp, text);
+		process_file(text);
 }
 
 static int add_fet_device(void *user_data, const struct fet_db_record *r)
@@ -318,16 +334,16 @@ static int list_devices(void)
 
 	vector_init(&v, sizeof(const char *));
 	if (fet_db_enum(add_fet_device, &v) < 0) {
-		perror("couldn't allocate memory");
+		pr_error("couldn't allocate memory");
 		vector_destroy(&v);
 		return -1;
 	}
 
 	qsort(v.ptr, v.size, v.elemsize, cmp_char_ptr);
 
-	printf("Devices supported by FET driver:\n");
+	printc("Devices supported by FET driver:\n");
 	for (i = 0; i < v.size; i++)
-		printf("    %s\n", VECTOR_AT(v, i, const char *));
+		printc("    %s\n", VECTOR_AT(v, i, const char *));
 
 	vector_destroy(&v);
 	return 0;
@@ -342,12 +358,24 @@ static int parse_cmdline_args(int argc, char **argv,
 		{"fet-list",            0, 0, 'L'},
 		{"fet-force-id",        1, 0, 'F'},
 		{"usb-list",            0, 0, 'I'},
+		{"version",             0, 0, 'V'},
+		{"no-reset",            0, 0, 'R'},
 		{NULL, 0, 0, 0}
 	};
 
-	while ((opt = getopt_long(argc, argv, "d:jv:nU:",
+	while ((opt = getopt_long(argc, argv, "d:jv:nU:q",
 				  longopts, NULL)) >= 0)
 		switch (opt) {
+		case 'q':
+			{
+				const static union opdb_value v = {
+					.boolean = 1
+				};
+
+				opdb_set("quiet", &v);
+			}
+			break;
+
 		case 'I':
 			usb_init();
 			usb_find_busses();
@@ -374,6 +402,10 @@ static int parse_cmdline_args(int argc, char **argv,
 			usage(argv[0]);
 			exit(0);
 
+		case 'V':
+			version();
+			exit(0);
+
 		case 'v':
 			args->vcc_mv = atoi(optarg);
 			break;
@@ -386,19 +418,23 @@ static int parse_cmdline_args(int argc, char **argv,
 			args->no_rc = 1;
 			break;
 
+		case 'R':
+			args->no_reset = 1;
+			break;
+
 		case '?':
-			fprintf(stderr, "Try --help for usage information.\n");
+			printc_err("Try --help for usage information.\n");
 			return -1;
 		}
 
 	if (args->usb_device && args->serial_device) {
-		fprintf(stderr, "You can't simultaneously specify a serial and "
+		printc_err("You can't simultaneously specify a serial and "
 			"a USB device.\n");
 		return -1;
 	}
 
 	if (optind >= argc) {
-		fprintf(stderr, "You need to specify a driver. Try --help for "
+		printc_err("You need to specify a driver. Try --help for "
 			"a list.\n");
 		return -1;
 	}
@@ -409,91 +445,65 @@ static int parse_cmdline_args(int argc, char **argv,
 	return 0;
 }
 
-cproc_t setup_cproc(struct cmdline_args *args)
+int setup_driver(struct cmdline_args *args)
 {
 	int i;
-	device_t msp430_dev;
-	stab_t stab;
-	cproc_t cp;
 
 	i = 0;
 	while (i < ARRAY_LEN(driver_table) &&
 	       strcasecmp(driver_table[i].name, args->driver_name))
 		i++;
 	if (i >= ARRAY_LEN(driver_table)) {
-		fprintf(stderr, "Unknown driver: %s. Try --help for a list.\n",
+		printc_err("Unknown driver: %s. Try --help for a list.\n",
 			args->driver_name);
-		return NULL;
+		return -1;
 	}
 
-	stab = stab_new();
-	if (!stab)
-		return NULL;
-	args->stab = stab;
+	stab_default = stab_new();
+	if (!stab_default)
+		return -1;
 
-	msp430_dev = driver_table[i].func(args);
-	if (!msp430_dev) {
-		stab_destroy(stab);
-		return NULL;
+	device_default = driver_table[i].func(args);
+	if (!device_default) {
+		stab_destroy(stab_default);
+		return -1;
 	}
 
-	cp = cproc_new(msp430_dev, stab);
-	if (!cp) {
-		msp430_dev->destroy(msp430_dev);
-		stab_destroy(stab);
-		return NULL;
-	}
-
-	if (sym_register(cp) < 0 ||
-	    devcmd_register(cp) < 0 ||
-	    gdb_register(cp) < 0 ||
-	    rtools_register(cp) < 0) {
-		cproc_destroy(cp);
-		return NULL;
-	}
-
-	return cp;
+	return 0;
 }
 
 int main(int argc, char **argv)
 {
 	struct cmdline_args args = {0};
-	cproc_t cp;
 	int ret = 0;
 
-	puts(
-"MSPDebug version 0.10 - debugging tool for MSP430 MCUs\n"
-"Copyright (C) 2009, 2010 Daniel Beer <daniel@tortek.co.nz>\n"
-"This is free software; see the source for copying conditions.  There is NO\n"
-"warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR "
-"PURPOSE.\n");
+	opdb_reset();
 
 	args.vcc_mv = 3000;
 	if (parse_cmdline_args(argc, argv, &args) < 0)
 		return -1;
 
-	ctrlc_init();
-
-	cp = setup_cproc(&args);
-	if (!cp)
+	if (setup_driver(&args) < 0)
 		return -1;
 
 	if (!args.no_rc)
-		process_rc_file(cp);
+		process_rc_file();
 
 	/* Process commands */
 	if (optind < argc) {
 		while (optind < argc) {
-			if (cproc_process_command(cp, argv[optind++]) < 0) {
+			if (process_command(argv[optind++]) < 0) {
 				ret = -1;
 				break;
 			}
 		}
 	} else {
-		cproc_reader_loop(cp);
+		ctrlc_init();
+		reader_loop();
 	}
 
-	cproc_destroy(cp);
+	stab_destroy(stab_default);
+	device_default->destroy(device_default);
 
 	return ret;
 }

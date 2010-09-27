@@ -31,6 +31,7 @@
 #include "fet.h"
 #include "fet_error.h"
 #include "fet_db.h"
+#include "output.h"
 
 #define MAX_PARAMS		16
 
@@ -42,7 +43,7 @@ struct fet_device {
 	int                             version;
 
 	/* Device-specific information */
-	u_int16_t                       code_start;
+	uint16_t                        code_start;
 
 	uint8_t                         fet_buf[65538];
 	int                             fet_len;
@@ -238,7 +239,7 @@ static int parse_packet(struct fet_device *dev, int plen)
 	int error;
 
 	if (c != r) {
-		fprintf(stderr, "fet: checksum error (calc %04x,"
+		printc_err("fet: checksum error (calc %04x,"
 			" recv %04x)\n", c, r);
 		return -1;
 	}
@@ -252,13 +253,13 @@ static int parse_packet(struct fet_device *dev, int plen)
 	error = dev->fet_buf[i++];
 
 	if (error) {
-		fprintf(stderr, "fet: FET returned error code %d (%s)\n",
+		printc_err("fet: FET returned error code %d (%s)\n",
 			error, fet_error(error));
 		return -1;
 	}
 
 	if (type == PTYPE_NAK) {
-		fprintf(stderr, "fet: FET returned NAK\n");
+		printc_err("fet: FET returned NAK\n");
 		return -1;
 	}
 
@@ -273,7 +274,7 @@ static int parse_packet(struct fet_device *dev, int plen)
 		i += 2;
 
 		if (dev->fet_reply.argc >= MAX_PARAMS) {
-			fprintf(stderr, "fet: too many params: %d\n",
+			printc_err("fet: too many params: %d\n",
 				dev->fet_reply.argc);
 			return -1;
 		}
@@ -308,7 +309,7 @@ static int parse_packet(struct fet_device *dev, int plen)
 	return 0;
 
 too_short:
-	fprintf(stderr, "fet: too short (%d bytes)\n",
+	printc_err("fet: too short (%d bytes)\n",
 		plen);
 	return -1;
 }
@@ -443,7 +444,7 @@ static int xfer(struct fet_device *dev,
 
 	va_start(ap, nparams);
 	for (i = 0; i < nparams; i++)
-		params[i] = va_arg(ap, unsigned int);
+		params[i] = va_arg(ap, uint32_t);
 	va_end(ap);
 
 	if (data && (dev->proto_flags & FET_PROTO_RF2500)) {
@@ -463,7 +464,7 @@ static int xfer(struct fet_device *dev,
 		return -1;
 
 	if (dev->fet_reply.command_code != command_code) {
-		fprintf(stderr, "fet: reply type mismatch\n");
+		printc_err("fet: reply type mismatch\n");
 		return -1;
 	}
 
@@ -476,9 +477,9 @@ static int xfer(struct fet_device *dev,
 
 static void show_dev_info(const char *name, const struct fet_device *dev)
 {
-	printf("Device: %s\n", name);
-	printf("Code memory starts at 0x%04x\n", dev->code_start);
-	printf("Number of breakpoints: %d\n", dev->base.max_breakpoints);
+	printc("Device: %s\n", name);
+	printc_dbg("Code memory starts at 0x%04x\n", dev->code_start);
+	printc_dbg("Number of breakpoints: %d\n", dev->base.max_breakpoints);
 }
 
 static int identify_old(struct fet_device *dev)
@@ -489,7 +490,7 @@ static int identify_old(struct fet_device *dev)
 		return -1;
 
 	if (dev->fet_reply.datalen < 0x26) {
-		fprintf(stderr, "fet: missing info\n");
+		printc_err("fet: missing info\n");
 		return -1;
 	}
 
@@ -509,16 +510,16 @@ static int identify_new(struct fet_device *dev, const char *force_id)
 	const struct fet_db_record *r;
 
 	if (xfer(dev, C_IDENT1, NULL, 0, 2, 0, 0) < 0) {
-		fprintf(stderr, "fet: command C_IDENT1 failed\n");
+		printc_err("fet: command C_IDENT1 failed\n");
 		return -1;
 	}
 
 	if (dev->fet_reply.datalen < 2) {
-		fprintf(stderr, "fet: missing info\n");
+		printc_err("fet: missing info\n");
 		return -1;
 	}
 
-	printf("Device ID: 0x%02x%02x\n",
+	printc_dbg("Device ID: 0x%02x%02x\n",
 	       dev->fet_reply.data[0], dev->fet_reply.data[1]);
 
 	if (force_id)
@@ -528,7 +529,7 @@ static int identify_new(struct fet_device *dev, const char *force_id)
 					 dev->fet_reply.datalen);
 
 	if (!r) {
-		fprintf(stderr, "fet: unknown device\n");
+		printc_err("fet: unknown device\n");
 		debug_hexdump("msg28_data:", dev->fet_reply.data,
 			      dev->fet_reply.datalen);
 		return -1;
@@ -540,12 +541,12 @@ static int identify_new(struct fet_device *dev, const char *force_id)
 	show_dev_info(r->name, dev);
 
 	if (xfer(dev, C_IDENT3, r->msg2b_data, r->msg2b_len, 0) < 0)
-		fprintf(stderr, "fet: warning: message C_IDENT3 failed\n");
+		printc_err("fet: warning: message C_IDENT3 failed\n");
 
 	if (xfer(dev, C_IDENT2, r->msg29_data, FET_DB_MSG29_LEN,
 		 3, r->msg29_params[0], r->msg29_params[1],
 		 r->msg29_params[2]) < 0) {
-		fprintf(stderr, "fet: message C_IDENT2 failed\n");
+		printc_err("fet: message C_IDENT2 failed\n");
 		return -1;
 	}
 
@@ -566,7 +567,7 @@ static int do_identify(struct fet_device *dev, const char *force_id)
 static int do_run(struct fet_device *dev, int type)
 {
 	if (xfer(dev, C_RUN, NULL, 0, 2, type, 0) < 0) {
-		fprintf(stderr, "fet: failed to restart CPU\n");
+		printc_err("fet: failed to restart CPU\n");
 		return -1;
 	}
 
@@ -576,23 +577,23 @@ static int do_run(struct fet_device *dev, int type)
 static int do_erase(struct fet_device *dev)
 {
 	if (xfer(dev, C_RESET, NULL, 0, 3, FET_RESET_ALL, 0, 0) < 0) {
-		fprintf(stderr, "fet: reset before erase failed\n");
+		printc_err("fet: reset before erase failed\n");
 		return -1;
 	}
 
 	if (xfer(dev, C_CONFIGURE, NULL, 0, 2, FET_CONFIG_CLKCTRL, 0x26) < 0) {
-		fprintf(stderr, "fet: config (1) failed\n");
+		printc_err("fet: config (1) failed\n");
 		return -1;
 	}
 
 	if (xfer(dev, C_CONFIGURE, NULL, 0, 2, FET_CONFIG_FLASH_LOCK, 0) < 0) {
-		fprintf(stderr, "fet: config (2) failed\n");
+		printc_err("fet: config (2) failed\n");
 		return -1;
 	}
 
 	if (xfer(dev, C_ERASE, NULL, 0, 3, FET_ERASE_MAIN,
 		 dev->code_start, 0) < 0) {
-		fprintf(stderr, "fet: erase command failed\n");
+		printc_err("fet: erase command failed\n");
 		return -1;
 	}
 
@@ -603,12 +604,11 @@ static device_status_t fet_poll(device_t dev_base)
 {
 	struct fet_device *dev = (struct fet_device *)dev_base;
 
-	/* Without this delay, breakpoints can get lost. */
-	if (usleep(500000) < 0)
+	if (usleep(50000) < 0)
 		return DEVICE_STATUS_INTR;
 
 	if (xfer(dev, C_STATE, NULL, 0, 1, 0) < 0) {
-		fprintf(stderr, "fet: polling failed\n");
+		printc_err("fet: polling failed\n");
 		return DEVICE_STATUS_ERROR;
 	}
 
@@ -633,7 +633,7 @@ static int refresh_bps(struct fet_device *dev)
 				addr = 0;
 
 			if (xfer(dev, C_BREAKPOINT, NULL, 0, 2, i, addr) < 0) {
-				fprintf(stderr, "fet: failed to refresh "
+				printc_err("fet: failed to refresh "
 					"breakpoint #%d\n", i);
 				ret = -1;
 			} else {
@@ -652,20 +652,20 @@ static int fet_ctl(device_t dev_base, device_ctl_t action)
 	switch (action) {
 	case DEVICE_CTL_RESET:
 		if (xfer(dev, C_RESET, NULL, 0, 3, FET_RESET_ALL, 0, 0) < 0) {
-			fprintf(stderr, "fet: reset failed\n");
+			printc_err("fet: reset failed\n");
 			return -1;
 		}
 		break;
 
 	case DEVICE_CTL_RUN:
 		if (refresh_bps(dev) < 0)
-			fprintf(stderr, "warning: fet: failed to refresh "
+			printc_err("warning: fet: failed to refresh "
 				"breakpoints\n");
 		return do_run(dev, FET_RUN_BREAKPOINT);
 
 	case DEVICE_CTL_HALT:
 		if (xfer(dev, C_STATE, NULL, 0, 1, 1) < 0) {
-			fprintf(stderr, "fet: failed to halt CPU\n");
+			printc_err("fet: failed to halt CPU\n");
 			return -1;
 		}
 		break;
@@ -698,16 +698,17 @@ static void fet_destroy(device_t dev_base)
 	struct fet_device *dev = (struct fet_device *)dev_base;
 
 	if (xfer(dev, C_RUN, NULL, 0, 2, FET_RUN_FREE, 1) < 0)
-		fprintf(stderr, "fet: failed to restart CPU\n");
+		printc_err("fet: failed to restart CPU\n");
 
 	if (xfer(dev, C_CLOSE, NULL, 0, 1, 0) < 0)
-		fprintf(stderr, "fet: close command failed\n");
+		printc_err("fet: close command failed\n");
 
 	dev->transport->destroy(dev->transport);
 	free(dev);
 }
 
-int fet_readmem(device_t dev_base, uint16_t addr, uint8_t *buffer, int count)
+int fet_readmem(device_t dev_base, address_t addr, uint8_t *buffer,
+		address_t count)
 {
 	struct fet_device *dev = (struct fet_device *)dev_base;
 
@@ -715,13 +716,13 @@ int fet_readmem(device_t dev_base, uint16_t addr, uint8_t *buffer, int count)
 		int plen = count > 128 ? 128 : count;
 
 		if (xfer(dev, C_READMEMORY, NULL, 0, 2, addr, plen) < 0) {
-			fprintf(stderr, "fet: failed to read "
+			printc_err("fet: failed to read "
 				"from 0x%04x\n", addr);
 			return -1;
 		}
 
 		if (dev->fet_reply.datalen < plen) {
-			fprintf(stderr, "fet: short data: "
+			printc_err("fet: short data: "
 				"%d bytes\n", dev->fet_reply.datalen);
 			return -1;
 		}
@@ -735,8 +736,8 @@ int fet_readmem(device_t dev_base, uint16_t addr, uint8_t *buffer, int count)
 	return 0;
 }
 
-int fet_writemem(device_t dev_base, uint16_t addr,
-		 const uint8_t *buffer, int count)
+int fet_writemem(device_t dev_base, address_t addr,
+		 const uint8_t *buffer, address_t count)
 {
 	struct fet_device *dev = (struct fet_device *)dev_base;
 
@@ -747,7 +748,7 @@ int fet_writemem(device_t dev_base, uint16_t addr,
 		ret = xfer(dev, C_WRITEMEMORY, buffer, plen, 1, addr);
 
 		if (ret < 0) {
-			fprintf(stderr, "fet: failed to write to 0x%04x\n",
+			printc_err("fet: failed to write to 0x%04x\n",
 				addr);
 			return -1;
 		}
@@ -760,7 +761,7 @@ int fet_writemem(device_t dev_base, uint16_t addr,
 	return 0;
 }
 
-static int fet_getregs(device_t dev_base, uint16_t *regs)
+static int fet_getregs(device_t dev_base, address_t *regs)
 {
 	struct fet_device *dev = (struct fet_device *)dev_base;
 	int i;
@@ -769,18 +770,18 @@ static int fet_getregs(device_t dev_base, uint16_t *regs)
 		return -1;
 
 	if (dev->fet_reply.datalen < DEVICE_NUM_REGS * 4) {
-		fprintf(stderr, "fet: short reply (%d bytes)\n",
+		printc_err("fet: short reply (%d bytes)\n",
 			dev->fet_reply.datalen);
 		return -1;
 	}
 
 	for (i = 0; i < DEVICE_NUM_REGS; i++)
-		regs[i] = LE_WORD(dev->fet_reply.data, i * 4);
+		regs[i] = LE_LONG(dev->fet_reply.data, i * 4);
 
 	return 0;
 }
 
-static int fet_setregs(device_t dev_base, const uint16_t *regs)
+static int fet_setregs(device_t dev_base, const address_t *regs)
 {
 	struct fet_device *dev = (struct fet_device *)dev_base;
 	uint8_t buf[DEVICE_NUM_REGS * 4];;
@@ -791,13 +792,15 @@ static int fet_setregs(device_t dev_base, const uint16_t *regs)
 
 	for (i = 0; i < DEVICE_NUM_REGS; i++) {
 		buf[i * 4] = regs[i] & 0xff;
-		buf[i * 4 + 1] = regs[i] >> 8;
+		buf[i * 4 + 1] = (regs[i] >> 8) & 0xff;
+		buf[i * 4 + 2] = (regs[i] >> 16) & 0xff;
+		buf[i * 4 + 3] = regs[i] >> 24;
 	}
 
 	ret = xfer(dev, C_WRITEREGISTERS, buf, sizeof(buf), 1, 0xffff);
 
 	if (ret < 0) {
-		fprintf(stderr, "fet: context set failed\n");
+		printc_err("fet: context set failed\n");
 		return -1;
 	}
 
@@ -809,30 +812,30 @@ static int do_configure(struct fet_device *dev)
 	if (dev->proto_flags & FET_PROTO_SPYBIWIRE) {
 		if (!xfer(dev, C_CONFIGURE, NULL, 0,
 			  2, FET_CONFIG_PROTOCOL, 1)) {
-			printf("Configured for Spy-Bi-Wire\n");
+			printc_dbg("Configured for Spy-Bi-Wire\n");
 			return 0;
 		}
 
-		fprintf(stderr, "fet: Spy-Bi-Wire configuration failed\n");
+		printc_err("fet: Spy-Bi-Wire configuration failed\n");
 		return -1;
 	}
 
 	if (!xfer(dev, C_CONFIGURE, NULL, 0,
 		  2, FET_CONFIG_PROTOCOL, 2)) {
-		printf("Configured for JTAG (2)\n");
+		printc_dbg("Configured for JTAG (2)\n");
 		return 0;
 	}
 
-	fprintf(stderr, "fet: warning: JTAG configuration failed -- "
+	printc_err("fet: warning: JTAG configuration failed -- "
 		"retrying\n");
 
 	if (!xfer(dev, C_CONFIGURE, NULL, 0,
 		  2, FET_CONFIG_PROTOCOL, 0)) {
-		printf("Configured for JTAG (0)\n");
+		printc_dbg("Configured for JTAG (0)\n");
 		return 0;
 	}
 
-	fprintf(stderr, "fet: JTAG configuration failed\n");
+	printc_err("fet: JTAG configuration failed\n");
 	return -1;
 }
 
@@ -843,7 +846,7 @@ device_t fet_open(transport_t transport, int proto_flags, int vcc_mv,
 	int i;
 
 	if (!dev) {
-		perror("fet: failed to allocate memory");
+		pr_error("fet: failed to allocate memory");
 		return NULL;
 	}
 
@@ -861,39 +864,46 @@ device_t fet_open(transport_t transport, int proto_flags, int vcc_mv,
 	dev->proto_flags = proto_flags;
 
 	if (proto_flags & FET_PROTO_OLIMEX) {
-		printf("Resetting Olimex command processor...\n");
+		printc("Resetting Olimex command processor...\n");
 		transport->send(dev->transport, (const uint8_t *)"\x7e", 1);
 		usleep(5000);
 		transport->send(dev->transport, (const uint8_t *)"\x7e", 1);
 		usleep(5000);
 	}
 
-	printf("Initializing FET...\n");
+	printc_dbg("Initializing FET...\n");
 	if (xfer(dev, C_INITIALIZE, NULL, 0, 0) < 0) {
-		fprintf(stderr, "fet: open failed\n");
+		printc_err("fet: open failed\n");
 		goto fail;
 	}
 
 	dev->version = dev->fet_reply.argv[0];
-	printf("FET protocol version is %d\n", dev->version);
+	printc_dbg("FET protocol version is %d\n", dev->version);
 
 	if (xfer(dev, 0x27, NULL, 0, 1, 4) < 0) {
-		fprintf(stderr, "fet: init failed\n");
+		printc_err("fet: init failed\n");
 		goto fail;
 	}
 
 	if (do_configure(dev) < 0)
 		goto fail;
 
+	/* Reset first, if requested */
+	if (!(proto_flags & FET_PROTO_NORESET)) {
+		printc_dbg("Sending initial reset...\n");
+		if (xfer(dev, C_RESET, NULL, 0, 3, FET_RESET_ALL, 0, 0) < 0)
+			printc_err("warning: fet: initial reset failed\n");
+	}
+
 	/* set VCC */
 	if (xfer(dev, C_VCC, NULL, 0, 1, vcc_mv) < 0)
-		fprintf(stderr, "warning: fet: set VCC failed\n");
+		printc_err("warning: fet: set VCC failed\n");
 	else
-		printf("Set Vcc: %d mV\n", vcc_mv);
+		printc_dbg("Set Vcc: %d mV\n", vcc_mv);
 
 	/* Identify the chip */
 	if (do_identify(dev, force_id) < 0) {
-		fprintf(stderr, "fet: identify failed\n");
+		printc_err("fet: identify failed\n");
 		goto fail;
 	}
 

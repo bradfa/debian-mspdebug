@@ -28,6 +28,9 @@
 #define LE_WORD(b, x) ((LE_BYTE(b, x + 1) << 8) | LE_BYTE(b, x))
 #define LE_LONG(b, x) ((LE_WORD(b, x + 2) << 16) | LE_WORD(b, x))
 
+/* This type fits an MSP430X register value */
+typedef uint32_t address_t;
+
 /* Various utility functions for IO */
 int open_serial(const char *device, int rate);
 int read_with_timeout(int fd, uint8_t *data, int len);
@@ -46,9 +49,6 @@ char *get_arg(char **text);
 /* Display hex output for debug purposes */
 void debug_hexdump(const char *label,
 		   const uint8_t *data, int len);
-
-/* Get text length, not including ANSI codes */
-int textlen(const char *text);
 
 static inline int ishex(int c)
 {
