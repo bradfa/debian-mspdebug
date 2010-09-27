@@ -19,7 +19,7 @@
 #ifndef DEVICE_H_
 #define DEVICE_H_
 
-#include <sys/types.h>
+#include <stdint.h>
 
 struct device;
 typedef struct device *device_t;
@@ -46,17 +46,17 @@ struct device {
 	void (*destroy)(device_t dev);
 
 	/* Read/write memory */
-	int (*readmem)(device_t dev, u_int16_t addr,
-		       u_int8_t *mem, int len);
-	int (*writemem)(device_t dev, u_int16_t addr,
-			const u_int8_t *mem, int len);
+	int (*readmem)(device_t dev, uint16_t addr,
+		       uint8_t *mem, int len);
+	int (*writemem)(device_t dev, uint16_t addr,
+			const uint8_t *mem, int len);
 
 	/* Read/write registers */
-	int (*getregs)(device_t dev, u_int16_t *regs);
-	int (*setregs)(device_t dev, const u_int16_t *regs);
+	int (*getregs)(device_t dev, uint16_t *regs);
+	int (*setregs)(device_t dev, const uint16_t *regs);
 
 	/* Breakpoint control */
-	int (*breakpoint)(device_t dev, int enabled, u_int16_t addr);
+	int (*breakpoint)(device_t dev, int enabled, uint16_t addr);
 
 	/* CPU control */
 	int (*ctl)(device_t dev, device_ctl_t op);
@@ -64,8 +64,5 @@ struct device {
 	/* Wait a little while for the CPU to change state */
 	device_status_t (*poll)(device_t dev);
 };
-
-/* Look up a device ID. Returns 0 on success or -1 if none found */
-int device_id_text(u_int16_t id, char *out, int max_len);
 
 #endif

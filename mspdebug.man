@@ -1,4 +1,4 @@
-.TH mspdebug 1 "30 Apr 2010" "Version 0.7"
+.TH mspdebug 1 "22 May 2010" "Version 0.8"
 .SH NAME
 MSPDebug - debugging tool for MSP430 MCUs
 .SH SYNOPSIS
@@ -86,8 +86,15 @@ aiding the disassembly of MSP430 binaries (as all binary and symbol
 table formats are still usable in this mode).
 .IP "\-n"
 Do not process the startup file (~/.mspdebug).
-.IP "\-?"
+.IP "\-\-help"
 Display a brief help message and exit.
+.IP "\-\-fet\-list"
+Display a list of devices supported by the FET driver (the driver used
+for \fB\-R\fR and \fB\-u\fR operating modes).
+.IP "\-\-fet\-force\-id \fIstring\fR"
+When using a FET device, force the connected chip to be recognised by
+MSPDebug as one of the given type during initialization. This overrides
+the device ID returned by the FET.
 .SH COMMANDS
 MSPDebug can accept commands either through an interactive prompt, or
 non-interactively when specified on the command line. The supported
@@ -106,6 +113,18 @@ question.
 
 See the section marked \fBADDRESS EXPRESSIONS\fR for more information on
 the syntax of expressions.
+.IP "\fBcgraph\fR \fIaddress\fR \fIlength\fR [\fIaddress\fR]"
+Construct the call graph of all functions contained or referenced in
+the given range of memory. If a particular function is specified, then
+details for that node of the graph are displayed. Otherwise, a summary
+of all nodes is displayed.
+
+Information from the symbol table is used for hinting at the possible
+locations of function starts. Any symbol which does not contain a "."
+is considered a possible function start.
+
+Callers and callee names are shown prefixed by a "*" where the
+transition is a tail-call type transition.
 .IP "\fBdis\fR \fIaddress\fR [\fIlength\fR]"
 Dissassemble a section of memory. Both arguments may be address
 expressions. If no length is specified, a section of the default
@@ -340,23 +359,6 @@ version of MSPDebug are described.
 Memory addresses above 0x10000 (in devices with more than 64k of
 memory) are not accessible. All other memory in these devices is
 accessible as normal.
-
-Most of the popular device IDs are recognized, but the set is not
-complete. If you see a message like the following after connecting:
-
-.B Unknown device ID: 0x\fI1234\fP
-
-Please report it, as well as the model of the device you are using.
-
-Firmware version 20107000 is known to work with MSPDebug, and you can
-update your FET to this version using the proprietary
-\fBmsp430\-gdbproxy\fR program:
-
-.B msp430-gdbproxy msp430 \fIdevice\fP --update-usb-fet
-
-This command updates the FET firmware using the same bootloader
-supported by MSPDebug's \fB\-B\fR option. However, as mentioned above,
-MSPDebug does not support erase or programming in this mode.
 
 When using the GDB remote stub in simulation and an IO read request
 occurs, any request to interrupt from GDB will not be acknowledged

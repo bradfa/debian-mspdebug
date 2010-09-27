@@ -40,12 +40,16 @@ static void sigint_handler(int signum)
 
 void ctrlc_init(void)
 {
-	const static struct sigaction siga = {
-		.sa_handler = sigint_handler,
-		.sa_flags = 0
-	};
+#ifdef WIN32
+       signal(SIGINT, sigint_handler);
+#else
+       const static struct sigaction siga = {
+               .sa_handler = sigint_handler,
+               .sa_flags = 0
+       };
 
-	sigaction(SIGINT, &siga, NULL);
+       sigaction(SIGINT, &siga, NULL);
+#endif
 }
 
 void ctrlc_reset(void)
@@ -58,7 +62,7 @@ int ctrlc_check(void)
 	return ctrlc_flag;
 }
 
-int read_with_timeout(int fd, u_int8_t *data, int max_len)
+int read_with_timeout(int fd, uint8_t *data, int max_len)
 {
 	int r;
 
@@ -86,7 +90,7 @@ int read_with_timeout(int fd, u_int8_t *data, int max_len)
 	return r;
 }
 
-int write_all(int fd, const u_int8_t *data, int len)
+int write_all(int fd, const uint8_t *data, int len)
 {
 	while (len) {
 		int result = write(fd, data, len);
@@ -111,7 +115,8 @@ int open_serial(const char *device, int rate)
 
 	tcgetattr(fd, &attr);
 	cfmakeraw(&attr);
-	cfsetspeed(&attr, rate);
+	cfsetispeed(&attr, rate);
+	cfsetospeed(&attr, rate);
 
 	if (tcsetattr(fd, TCSAFLUSH, &attr) < 0)
 		return -1;
@@ -225,7 +230,7 @@ char *get_arg(char **text)
 	return start;
 }
 
-void debug_hexdump(const char *label, const u_int8_t *data, int len)
+void debug_hexdump(const char *label, const uint8_t *data, int len)
 {
 	int offset = 0;
 

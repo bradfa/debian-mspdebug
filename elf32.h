@@ -1,4 +1,4 @@
-/* MSPDebug - debugging tool for MSP430 MCUs
+/* MSPDebug - debugging tool for the eZ430
  * Copyright (C) 2009, 2010 Daniel Beer
  *
  * This program is free software; you can redistribute it and/or modify
@@ -16,25 +16,13 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef SIM_H_
-#define SIM_H_
+#ifndef ELF32_H_
+#define ELF32_H_
 
-#include "device.h"
+#include "binfile.h"
 
-/* These function pointers should be supplied in order to allow
- * the simulator to perform IO operations. If they're left blank, IO
- * addresses just map to RAM.
- */
-typedef int (*sim_fetch_func_t)(void *user_data,
-				uint16_t pc, uint16_t addr,
-				int is_byte, uint16_t *data);
-
-typedef void (*sim_store_func_t)(void *user_data,
-				 uint16_t pc, uint16_t addr,
-				 int is_byte, uint16_t data);
-
-/* Dummy/simulation implementation. */
-device_t sim_open(sim_fetch_func_t fetch, sim_store_func_t store,
-		  void *user_data);
+int elf32_check(FILE *in);
+int elf32_extract(FILE *in, binfile_imgcb_t cb, void *user_data);
+int elf32_syms(FILE *in, stab_t stab);
 
 #endif

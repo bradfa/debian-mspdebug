@@ -24,11 +24,11 @@
 #include "stab.h"
 #include "util.h"
 
-static int format_addr(char *buf, int max_len,
-		       msp430_amode_t amode, u_int16_t addr)
+static int format_addr(stab_t stab, char *buf, int max_len,
+		       msp430_amode_t amode, uint16_t addr)
 {
 	char name[64];
-	u_int16_t offset;
+	uint16_t offset;
 	int numeric = 0;
 	const char *prefix = "";
 
@@ -54,7 +54,7 @@ static int format_addr(char *buf, int max_len,
 
 	if ((!numeric ||
 	     (addr >= 0x200 && addr < 0xfff0)) &&
-	    !stab_nearest(addr, name, sizeof(name), &offset) &&
+	    !stab_nearest(stab, addr, name, sizeof(name), &offset) &&
 	    !offset)
 		return snprintf(buf, max_len,
 				"%s\x1b[1m%s\x1b[0m", prefix, name);
@@ -108,19 +108,19 @@ static int format_reg(char *buf, int max_len,
  *
  * Returns the number of characters printed.
  */
-static int format_operand(char *buf, int max_len,
-			  msp430_amode_t amode, u_int16_t addr,
+static int format_operand(stab_t stab, char *buf, int max_len,
+			  msp430_amode_t amode, uint16_t addr,
 			  msp430_reg_t reg)
 {
 	int len = 0;
 
-	len += format_addr(buf, max_len, amode, addr);
+	len += format_addr(stab, buf, max_len, amode, addr);
 	len += format_reg(buf + len, max_len - len, amode, reg);
 	return len;
 }
 
 /* Write assembly language for the instruction to this buffer */
-static int dis_format(char *buf, int max_len,
+static int dis_format(stab_t stab, char *buf, int max_len,
 		      const struct msp430_instruction *insn)
 {
 	int len;
@@ -144,7 +144,7 @@ static int dis_format(char *buf, int max_len,
 
 	/* Source operand */
 	if (insn->itype == MSP430_ITYPE_DOUBLE) {
-		len = format_operand(buf + total,
+		len = format_operand(stab, buf + total,
 				     max_len - total,
 				     insn->src_mode,
 				     insn->src_addr,
@@ -166,7 +166,7 @@ static int dis_format(char *buf, int max_len,
 
 	/* Destination operand */
 	if (insn->itype != MSP430_ITYPE_NOARG)
-		total += format_operand(buf + total,
+		total += format_operand(stab, buf + total,
 					max_len - total,
 					insn->dst_mode,
 					insn->dst_addr,
@@ -183,8 +183,9 @@ static int dis_format(char *buf, int max_len,
 }
 
 void cproc_disassemble(cproc_t cp,
-		       u_int16_t offset, const u_int8_t *data, int length)
+		       uint16_t offset, const uint8_t *data, int length)
 {
+	stab_t stab = cproc_stab(cp);
 	int first_line = 1;
 
 	while (length) {
@@ -192,12 +193,13 @@ void cproc_disassemble(cproc_t cp,
 		int retval;
 		int count;
 		int i;
-		u_int16_t oboff;
+		uint16_t oboff;
 		char obname[64];
 		char buf[256];
 		int len = 0;
 
-		if (!stab_nearest(offset, obname, sizeof(obname), &oboff)) {
+		if (!stab_nearest(stab, offset, obname, sizeof(obname),
+				  &oboff)) {
 			if (!oboff)
 				cproc_printf(cp, "\x1b[m%s:\x1b[0m", obname);
 			else if (first_line)
@@ -226,9 +228,10 @@ void cproc_disassemble(cproc_t cp,
 		}
 
 		if (retval >= 0)
-			len += dis_format(buf + len, sizeof(buf) - len,
+			len += dis_format(stab, buf + len, sizeof(buf) - len,
 					  &insn);
 
+		buf[len] = 0;
 		cproc_printf(cp, "%s", buf);
 		offset += count;
 		length -= count;
@@ -236,11 +239,11 @@ void cproc_disassemble(cproc_t cp,
 	}
 }
 
-void cproc_hexdump(cproc_t cp, u_int16_t addr, const u_int8_t *data, int len)
+void cproc_hexdump(cproc_t cp, uint16_t addr, const uint8_t *data, int data_len)
 {
 	int offset = 0;
 
-	while (offset < len) {
+	while (offset < data_len) {
 		char buf[128];
 		int len = 0;
 		int i, j;
@@ -250,7 +253,7 @@ void cproc_hexdump(cproc_t cp, u_int16_t addr, const u_int8_t *data, int len)
 				"    \x1b[36m%04x:\x1b[0m", offset + addr);
 
 		/* Hex portion */
-		for (i = 0; i < 16 && offset + i < len; i++)
+		for (i = 0; i < 16 && offset + i < data_len; i++)
 			len += snprintf(buf + len, sizeof(buf) - len,
 					" %02x", data[offset + i]);
 		for (j = i; j < 16; j++) {
@@ -277,7 +280,7 @@ void cproc_hexdump(cproc_t cp, u_int16_t addr, const u_int8_t *data, int len)
 	}
 }
 
-void cproc_regs(cproc_t cp, const u_int16_t *regs)
+void cproc_regs(cproc_t cp, const uint16_t *regs)
 {
 	int i;
 

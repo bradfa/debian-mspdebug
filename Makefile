@@ -27,6 +27,8 @@ READLINE_CFLAGS = -DUSE_READLINE
 READLINE_LIBS = -lreadline
 endif
 
+MSPDEBUG_CFLAGS = -O1 -Wall -Wno-char-subscripts -ggdb
+
 all: mspdebug
 
 clean:
@@ -34,15 +36,15 @@ clean:
 	/bin/rm -f mspdebug
 
 install: mspdebug mspdebug.man
-	$(INSTALL) -o root -m 0755 -s mspdebug $(PREFIX)/bin/mspdebug
-	$(INSTALL) -o root -m 0644 mspdebug.man $(PREFIX)/share/man/man1/mspdebug.1
+	$(INSTALL) -D -m 0755 -s mspdebug $(PREFIX)/bin/mspdebug
+	$(INSTALL) -D -m 0644 mspdebug.man $(PREFIX)/share/man/man1/mspdebug.1
 
 .SUFFIXES: .c .o
 
 mspdebug: main.o fet.o rf2500.o dis.o uif.o ihex.o elf32.o stab.o util.o \
-	  bsl.o sim.o symmap.o gdb.o btree.o device.o rtools.o sym.o devcmd.o \
-	  cproc.o vector.o cproc_util.o
+	  bsl.o sim.o symmap.o gdb.o btree.o rtools.o sym.o devcmd.o \
+	  cproc.o vector.o cproc_util.o expr.o fet_error.o binfile.o fet_db.o
 	$(CC) $(LDFLAGS) -o $@ $^ -lusb $(READLINE_LIBS)
 
 .c.o:
-	$(CC) $(CFLAGS) $(READLINE_CFLAGS) -O1 -Wall -ggdb -o $@ -c $*.c
+	$(CC) $(CFLAGS) $(READLINE_CFLAGS) $(MSPDEBUG_CFLAGS) -o $@ -c $*.c

@@ -19,7 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include "binfile.h"
+#include "ihex.h"
 
 int ihex_check(FILE *in)
 {
@@ -27,10 +27,10 @@ int ihex_check(FILE *in)
 	return fgetc(in) == ':';
 }
 
-static int feed_line(FILE *in, u_int8_t *data, int nbytes, imgfunc_t cb,
+static int feed_line(FILE *in, uint8_t *data, int nbytes, binfile_imgcb_t cb,
 		     void *user_data)
 {
-	u_int8_t cksum = 0;
+	uint8_t cksum = 0;
 	int i;
 
 	if (nbytes < 5 || data[3])
@@ -48,11 +48,11 @@ static int feed_line(FILE *in, u_int8_t *data, int nbytes, imgfunc_t cb,
 	}
 
 	return cb(user_data,
-		  ((u_int16_t)data[1]) << 8 | ((u_int16_t)data[2]),
+		  ((uint16_t)data[1]) << 8 | ((uint16_t)data[2]),
 		  data + 4, nbytes - 5);
 }
 
-int ihex_extract(FILE *in, imgfunc_t cb, void *user_data)
+int ihex_extract(FILE *in, binfile_imgcb_t cb, void *user_data)
 {
 	char buf[128];
 	int lno = 0;
@@ -61,7 +61,7 @@ int ihex_extract(FILE *in, imgfunc_t cb, void *user_data)
 	while (fgets(buf, sizeof(buf), in)) {
 		int len = strlen(buf);
 		int i;
-		u_int8_t data[64];
+		uint8_t data[64];
 		int nbytes;
 
 		lno++;

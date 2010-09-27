@@ -23,7 +23,7 @@
 #include <unistd.h>
 #include <ctype.h>
 #include <stdarg.h>
-#include <sys/types.h>
+#include <stdint.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -47,6 +47,12 @@ struct gdb_data {
 	int             outlen;
 
 	device_t        device;
+
+	/* The underlying device driver supports only one breakpoint at
+	 * a time. We keep track of whether or not it's in use and report
+	 * an error to gdb if more than one is set.
+	 */
+	int             have_breakpoint;
 };
 
 static void gdb_printf(struct gdb_data *data, const char *fmt, ...)
@@ -61,18 +67,6 @@ static void gdb_printf(struct gdb_data *data, const char *fmt, ...)
 	va_end(ap);
 
 	data->outlen += len;
-}
-
-static int gdb_flush(struct gdb_data *data)
-{
-	if (send(data->sock, data->outbuf, data->outlen, 0) < 0) {
-		data->error = errno;
-		perror("gdb: send");
-		return -1;
-	}
-
-	data->outlen = 0;
-	return 0;
 }
 
 static int gdb_read(struct gdb_data *data, int blocking)
@@ -136,6 +130,18 @@ static int gdb_getc(struct gdb_data *data)
 	return c;
 }
 
+static int gdb_flush(struct gdb_data *data)
+{
+	if (send(data->sock, data->outbuf, data->outlen, 0) < 0) {
+		data->error = errno;
+		perror("gdb: flush");
+		return -1;
+	}
+
+	data->outlen = 0;
+	return 0;
+}
+
 static int gdb_flush_ack(struct gdb_data *data)
 {
 	int c;
@@ -145,14 +151,18 @@ static int gdb_flush_ack(struct gdb_data *data)
 #ifdef DEBUG_GDB
 		printf("-> %s\n", data->outbuf);
 #endif
-		if (gdb_flush(data) < 0)
+		if (send(data->sock, data->outbuf, data->outlen, 0) < 0) {
+			data->error = errno;
+			perror("gdb: flush_ack");
 			return -1;
+		}
 
 		c = gdb_getc(data);
 		if (c < 0)
 			return -1;
 	} while (c != '+');
 
+	data->outlen = 0;
 	return 0;
 }
 
@@ -207,7 +217,7 @@ static int gdb_send(struct gdb_data *data, const char *msg)
 
 static int read_registers(struct gdb_data *data)
 {
-	u_int16_t regs[DEVICE_NUM_REGS];
+	uint16_t regs[DEVICE_NUM_REGS];
 	int i;
 
 	printf("Reading registers\n");
@@ -227,9 +237,15 @@ static int monitor_command(struct gdb_data *data, char *buf)
 	int len = 0;
 
 	while (len + 1 < sizeof(cmd) && *buf && buf[1]) {
+		if (len + 1 >= sizeof(cmd))
+			break;
+
 		cmd[len++] = (hexval(buf[0]) << 4) | hexval(buf[1]);
 		buf += 2;
 	}
+	cmd[len] = 0;
+
+	printf("Monitor command received: %s\n", cmd);
 
 	if (!strcasecmp(cmd, "reset")) {
 		printf("Resetting device\n");
@@ -246,7 +262,7 @@ static int monitor_command(struct gdb_data *data, char *buf)
 
 static int write_registers(struct gdb_data *data, char *buf)
 {
-	u_int16_t regs[DEVICE_NUM_REGS];
+	uint16_t regs[DEVICE_NUM_REGS];
 	int i;
 
 	if (strlen(buf) < DEVICE_NUM_REGS * 4)
@@ -271,7 +287,7 @@ static int read_memory(struct gdb_data *data, char *text)
 {
 	char *length_text = strchr(text, ',');
 	int length, addr;
-	u_int8_t buf[128];
+	uint8_t buf[128];
 	int i;
 
 	if (!length_text) {
@@ -305,7 +321,7 @@ static int write_memory(struct gdb_data *data, char *text)
 	char *data_text = strchr(text, ':');
 	char *length_text = strchr(text, ',');
 	int length, addr;
-	u_int8_t buf[128];
+	uint8_t buf[128];
 	int buflen = 0;
 
 	if (!(data_text && length_text)) {
@@ -340,7 +356,7 @@ static int write_memory(struct gdb_data *data, char *text)
 
 static int run_set_pc(struct gdb_data *data, char *buf)
 {
-	u_int16_t regs[DEVICE_NUM_REGS];
+	uint16_t regs[DEVICE_NUM_REGS];
 
 	if (!*buf)
 		return 0;
@@ -354,7 +370,7 @@ static int run_set_pc(struct gdb_data *data, char *buf)
 
 static int run_final_status(struct gdb_data *data)
 {
-	u_int16_t regs[DEVICE_NUM_REGS];
+	uint16_t regs[DEVICE_NUM_REGS];
 	int i;
 
 	if (data->device->getregs(data->device, regs) < 0)
@@ -386,18 +402,14 @@ static int run(struct gdb_data *data, char *buf)
 	printf("Running\n");
 
 	if (run_set_pc(data, buf) < 0 ||
-	    data->device->ctl(data->device, DEVICE_CTL_RUN) < 0) {
-		gdb_send(data, "E00");
-		return run_final_status(data);
-	}
+	    data->device->ctl(data->device, DEVICE_CTL_RUN) < 0)
+		return gdb_send(data, "E00");
 
 	for (;;) {
 		device_status_t status = data->device->poll(data->device);
 
-		if (status == DEVICE_STATUS_ERROR) {
-			gdb_send(data, "E00");
-			return run_final_status(data);
-		}
+		if (status == DEVICE_STATUS_ERROR)
+			return gdb_send(data, "E00");
 
 		if (status == DEVICE_STATUS_HALTED) {
 			printf("Target halted\n");
@@ -422,9 +434,64 @@ static int run(struct gdb_data *data, char *buf)
 
  out:
 	if (data->device->ctl(data->device, DEVICE_CTL_HALT) < 0)
-		gdb_send(data, "E00");
+		return gdb_send(data, "E00");
 
 	return run_final_status(data);
+}
+
+static int set_breakpoint(struct gdb_data *data, int enable, char *buf)
+{
+	char *parts[2];
+	int type;
+	int addr;
+	int i;
+
+	/* Break up the arguments */
+	for (i = 0; i < 2; i++)
+		parts[i] = strsep(&buf, ",");
+
+	/* Make sure there's a type argument */
+	if (!parts[0]) {
+		fprintf(stderr, "gdb: breakpoint requested with no type\n");
+		return gdb_send(data, "E00");
+	}
+
+	/* We only support breakpoints */
+	type = atoi(parts[0]);
+	if (type < 0 || type > 1) {
+		fprintf(stderr, "gdb: unsupported breakpoint type: %s\n",
+			parts[0]);
+		return gdb_send(data, "");
+	}
+
+	/* There needs to be an address specified */
+	if (!parts[1]) {
+		fprintf(stderr, "gdb: breakpoint address missing\n");
+		return gdb_send(data, "E00");
+	}
+
+	/* Parse the breakpoint address */
+	addr = strtoul(parts[1], NULL, 16);
+
+	/* Only one breakpoint at a time is allowed */
+	if (enable && data->have_breakpoint) {
+		fprintf(stderr, "gdb: only one breakpoint allowed "
+			"at a time\n");
+		return gdb_send(data, "E00");
+	}
+
+	/* Set the breakpoint */
+	if (data->device->breakpoint(data->device, enable, addr) < 0)
+		return gdb_send(data, "E00");
+
+	data->have_breakpoint = enable;
+
+	if (enable)
+		printf("Breakpoint set at 0x%04x\n", addr);
+	else
+		printf("Breakpoint cleared\n");
+
+	return gdb_send(data, "OK");
 }
 
 static int process_gdb_command(struct gdb_data *data, char *buf, int len)
@@ -432,6 +499,10 @@ static int process_gdb_command(struct gdb_data *data, char *buf, int len)
 	switch (buf[0]) {
 	case '?': /* Return target halt reason */
 		return gdb_send(data, "T00");
+
+	case 'z':
+	case 'Z':
+		return set_breakpoint(data, buf[0] == 'Z', buf + 1);
 
 	case 'g': /* Read registers */
 		return read_registers(data);
@@ -580,7 +651,13 @@ static int gdb_server(device_t device, int port)
 	data.outlen = 0;
 	data.device = device;
 
+	/* Put the hardware breakpoint setting into a known state. */
+	data.have_breakpoint = 0;
+	device->breakpoint(device, 0, 0);
+
 	gdb_reader_loop(&data);
+
+	device->breakpoint(device, 0, 0);
 
 	return data.error ? -1 : 0;
 }

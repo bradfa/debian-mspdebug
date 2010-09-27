@@ -22,6 +22,7 @@
 #include <string.h>
 #include <errno.h>
 #include <unistd.h>
+#include <getopt.h>
 
 #include "dis.h"
 #include "device.h"
@@ -32,20 +33,24 @@
 #include "rtools.h"
 #include "sym.h"
 #include "devcmd.h"
+#include "expr.h"
 
 #include "sim.h"
 #include "bsl.h"
 #include "fet.h"
+#include "vector.h"
+#include "fet_db.h"
 
 #include "uif.h"
 #include "rf2500.h"
 
-static void io_prefix(const char *prefix, u_int16_t pc,
-		      u_int16_t addr, int is_byte)
+static void io_prefix(stab_t stab,
+		      const char *prefix, uint16_t pc,
+		      uint16_t addr, int is_byte)
 {
 	char name[64];
 
-	if (!stab_nearest(pc, name, sizeof(name), &pc)) {
+	if (!stab_nearest(stab, pc, name, sizeof(name), &pc)) {
 		printf("%s", name);
 		if (pc)
 			printf("+0x%x", pc);
@@ -54,7 +59,7 @@ static void io_prefix(const char *prefix, u_int16_t pc,
 	}
 
 	printf(": IO %s.%c: 0x%04x", prefix, is_byte ? 'B' : 'W', addr);
-	if (!stab_nearest(addr, name, sizeof(name), &addr)) {
+	if (!stab_nearest(stab, addr, name, sizeof(name), &addr)) {
 		printf(" (%s", name);
 		if (addr)
 			printf("+0x%x", addr);
@@ -62,10 +67,12 @@ static void io_prefix(const char *prefix, u_int16_t pc,
 	}
 }
 
-static int fetch_io(void *user_data, u_int16_t pc,
-		    u_int16_t addr, int is_byte, u_int16_t *data_ret)
+static int fetch_io(void *user_data, uint16_t pc,
+		    uint16_t addr, int is_byte, uint16_t *data_ret)
 {
-	io_prefix("READ", pc, addr, is_byte);
+	stab_t stab = (stab_t)user_data;
+
+	io_prefix(stab, "READ", pc, addr, is_byte);
 
 	for (;;) {
 		char text[128];
@@ -87,7 +94,7 @@ static int fetch_io(void *user_data, u_int16_t pc,
 		if (!len)
 			return 0;
 
-		if (!stab_exp(text, &data)) {
+		if (!expr_eval(stab, text, &data)) {
 			if (data_ret)
 				*data_ret = data;
 			return 0;
@@ -97,10 +104,12 @@ static int fetch_io(void *user_data, u_int16_t pc,
 	return 0;
 }
 
-static void store_io(void *user_data, u_int16_t pc,
-		     u_int16_t addr, int is_byte, u_int16_t data)
+static void store_io(void *user_data, uint16_t pc,
+		     uint16_t addr, int is_byte, uint16_t data)
 {
-	io_prefix("WRITE", pc, addr, is_byte);
+	stab_t stab = (stab_t)user_data;
+
+	io_prefix(stab, "WRITE", pc, addr, is_byte);
 
 	if (is_byte)
 		printf(" => 0x%02x\n", data & 0xff);
@@ -130,8 +139,12 @@ static void usage(const char *progname)
 "        Start in simulation mode.\n"
 "    -n\n"
 "        Do not read ~/.mspdebug on startup.\n"
-"    -?\n"
+"    --help\n"
 "        Show this help text.\n"
+"    --fet-list\n"
+"        Show a list of devices supported by the FET driver.\n"
+"    --fet-force-id string\n"
+"        Override the device ID returned by the FET.\n"
 "\n"
 "By default, the first RF2500 device on the USB bus is opened.\n"
 "\n"
@@ -161,19 +174,72 @@ static void process_rc_file(cproc_t cp)
 struct cmdline_args {
 	const char      *uif_device;
 	const char      *bsl_device;
+	const char      *fet_force_id;
 	int             mode;
 	int             want_jtag;
 	int             no_rc;
 	int             vcc_mv;
 };
 
+static int add_fet_device(void *user_data, const struct fet_db_record *r)
+{
+	struct vector *v = (struct vector *)user_data;
+
+	return vector_push(v, &r->name, 1);
+}
+
+static int cmp_char_ptr(const void *a, const void *b)
+{
+	return strcmp(*(const char **)a, *(const char **)b);
+}
+
+static int list_devices(void)
+{
+	struct vector v;
+	int i;
+
+	vector_init(&v, sizeof(const char *));
+	if (fet_db_enum(add_fet_device, &v) < 0) {
+		perror("couldn't allocate memory");
+		vector_destroy(&v);
+		return -1;
+	}
+
+	qsort(v.ptr, v.size, v.elemsize, cmp_char_ptr);
+
+	printf("Devices supported by FET driver:\n");
+	for (i = 0; i < v.size; i++)
+		printf("    %s\n", VECTOR_AT(v, i, const char *));
+
+	vector_destroy(&v);
+	return 0;
+}
+
 static int parse_cmdline_args(int argc, char **argv,
 			      struct cmdline_args *args)
 {
 	int opt;
+	const static struct option longopts[] = {
+		{"help",                0, 0, 'H'},
+		{"fet-list",            0, 0, 'L'},
+		{"fet-force-id",        1, 0, 'F'},
+		{NULL, 0, 0, 0}
+	};
 
-	while ((opt = getopt(argc, argv, "u:jv:B:sR?n")) >= 0)
+	while ((opt = getopt_long(argc, argv, "u:jv:B:sR?n",
+				  longopts, NULL)) >= 0)
 		switch (opt) {
+		case 'L':
+			exit(list_devices());
+
+		case 'F':
+			args->fet_force_id = optarg;
+			break;
+
+		case 'H':
+			usage(argv[0]);
+			exit(0);
+
 		case 'R':
 			args->mode |= MODE_RF2500;
 			break;
@@ -205,39 +271,39 @@ static int parse_cmdline_args(int argc, char **argv,
 			break;
 
 		case '?':
-			usage(argv[0]);
-			return 0;
+			return -1;
 
 		default:
 			fprintf(stderr, "Invalid argument: %c\n"
-				"Try -? for help.\n", opt);
+				"Try --help for help.\n", opt);
 			return -1;
 		}
 
 	/* Check for incompatible arguments */
 	if (args->mode & (args->mode - 1)) {
 		fprintf(stderr, "Multiple incompatible options specified.\n"
-			"Try -? for help.\n");
+			"Try --help for help.\n");
 		return -1;
 	}
 
 	if (!args->mode) {
 		fprintf(stderr, "You need to specify an operating mode.\n"
-			"Try -? for help.\n");
+			"Try --help for help.\n");
 		return -1;
 	}
 
 	return 0;
 }
 
-device_t setup_device(const struct cmdline_args *args)
+device_t setup_device(const struct cmdline_args *args,
+		      stab_t stab)
 {
 	device_t msp430_dev = NULL;
 	transport_t trans = NULL;
 
 	/* Open a device */
 	if (args->mode == MODE_SIM) {
-		msp430_dev = sim_open(fetch_io, store_io, NULL);
+		msp430_dev = sim_open(fetch_io, store_io, stab);
 	} else if (args->mode == MODE_UIF_BSL) {
 		msp430_dev = bsl_open(args->bsl_device);
 	} else if (args->mode == MODE_RF2500 || args->mode == MODE_UIF) {
@@ -258,7 +324,8 @@ device_t setup_device(const struct cmdline_args *args)
 		if (!args->want_jtag)
 			flags |= FET_PROTO_SPYBIWIRE;
 
-		msp430_dev = fet_open(trans, flags, args->vcc_mv);
+		msp430_dev = fet_open(trans, flags, args->vcc_mv,
+				      args->fet_force_id);
 	}
 
 	if (!msp430_dev) {
@@ -272,15 +339,24 @@ device_t setup_device(const struct cmdline_args *args)
 
 cproc_t setup_cproc(const struct cmdline_args *args)
 {
-	device_t msp430_dev = setup_device(args);
+	device_t msp430_dev;
+	stab_t stab;
 	cproc_t cp;
 
-	if (!msp430_dev)
+	stab = stab_new();
+	if (!stab)
 		return NULL;
 
-	cp = cproc_new(msp430_dev);
+	msp430_dev = setup_device(args, stab);
+	if (!msp430_dev) {
+		stab_destroy(stab);
+		return NULL;
+	}
+
+	cp = cproc_new(msp430_dev, stab);
 	if (!cp) {
 		msp430_dev->destroy(msp430_dev);
+		stab_destroy(stab);
 		return NULL;
 	}
 
@@ -302,7 +378,7 @@ int main(int argc, char **argv)
 	int ret = 0;
 
 	puts(
-"MSPDebug version 0.7 - debugging tool for MSP430 MCUs\n"
+"MSPDebug version 0.8 - debugging tool for MSP430 MCUs\n"
 "Copyright (C) 2009, 2010 Daniel Beer <daniel@tortek.co.nz>\n"
 "This is free software; see the source for copying conditions.  There is NO\n"
 "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n");
@@ -313,14 +389,9 @@ int main(int argc, char **argv)
 
 	ctrlc_init();
 
-	if (stab_init() < 0)
-		return -1;
-
 	cp = setup_cproc(&args);
-	if (!cp) {
-		stab_exit();
+	if (!cp)
 		return -1;
-	}
 
 	if (!args.no_rc)
 		process_rc_file(cp);
@@ -338,7 +409,6 @@ int main(int argc, char **argv)
 	}
 
 	cproc_destroy(cp);
-	stab_exit();
 
 	return ret;
 }

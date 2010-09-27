@@ -16,25 +16,15 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef SIM_H_
-#define SIM_H_
+#ifndef EXPR_H_
+#define EXPR_H_
 
-#include "device.h"
+#include <stdint.h>
+#include "stab.h"
 
-/* These function pointers should be supplied in order to allow
- * the simulator to perform IO operations. If they're left blank, IO
- * addresses just map to RAM.
+/* Parse an address expression, storing the result in the integer
+ * pointed to. Returns 0 if parsed successfully, -1 if not.
  */
-typedef int (*sim_fetch_func_t)(void *user_data,
-				uint16_t pc, uint16_t addr,
-				int is_byte, uint16_t *data);
-
-typedef void (*sim_store_func_t)(void *user_data,
-				 uint16_t pc, uint16_t addr,
-				 int is_byte, uint16_t data);
-
-/* Dummy/simulation implementation. */
-device_t sim_open(sim_fetch_func_t fetch, sim_store_func_t store,
-		  void *user_data);
+int expr_eval(stab_t stab, const char *text, int *value);
 
 #endif

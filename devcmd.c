@@ -25,6 +25,7 @@
 #include "device.h"
 #include "binfile.h"
 #include "stab.h"
+#include "expr.h"
 #include "cproc.h"
 #include "cproc_util.h"
 #include "util.h"
@@ -33,23 +34,27 @@
 static int cmd_regs(cproc_t cp, char **arg)
 {
 	device_t dev = cproc_device(cp);
-	u_int16_t regs[DEVICE_NUM_REGS];
-	u_int8_t code[16];
+	uint16_t regs[DEVICE_NUM_REGS];
+	uint8_t code[16];
+	int len = sizeof(code);
 
 	if (dev->getregs(dev, regs) < 0)
 		return -1;
 	cproc_regs(cp, regs);
 
 	/* Try to disassemble the instruction at PC */
-	if (dev->readmem(dev, regs[0], code, sizeof(code)) < 0)
+	if (len > 0x10000 - regs[0])
+		len = 0x10000 - regs[0];
+	if (dev->readmem(dev, regs[0], code, len) < 0)
 		return 0;
 
-	cproc_disassemble(cp, regs[0], (u_int8_t *)code, sizeof(code));
+	cproc_disassemble(cp, regs[0], (uint8_t *)code, len);
 	return 0;
 }
 
 static int cmd_md(cproc_t cp, char **arg)
 {
+	stab_t stab = cproc_stab(cp);
 	device_t dev = cproc_device(cp);
 	char *off_text = get_arg(arg);
 	char *len_text = get_arg(arg);
@@ -61,13 +66,13 @@ static int cmd_md(cproc_t cp, char **arg)
 		return -1;
 	}
 
-	if (stab_exp(off_text, &offset) < 0) {
+	if (expr_eval(stab, off_text, &offset) < 0) {
 		fprintf(stderr, "md: can't parse offset: %s\n", off_text);
 		return -1;
 	}
 
 	if (len_text) {
-		if (stab_exp(len_text, &length) < 0) {
+		if (expr_eval(stab, len_text, &length) < 0) {
 			fprintf(stderr, "md: can't parse length: %s\n",
 				len_text);
 			return -1;
@@ -82,7 +87,7 @@ static int cmd_md(cproc_t cp, char **arg)
 	}
 
 	while (length) {
-		u_int8_t buf[128];
+		uint8_t buf[128];
 		int blen = length > sizeof(buf) ? sizeof(buf) : length;
 
 		if (dev->readmem(dev, offset, buf, blen) < 0)
@@ -99,18 +104,19 @@ static int cmd_md(cproc_t cp, char **arg)
 static int cmd_mw(cproc_t cp, char **arg)
 {
 	device_t dev = cproc_device(cp);
+	stab_t stab = cproc_stab(cp);
 	char *off_text = get_arg(arg);
 	char *byte_text;
 	int offset = 0;
 	int length = 0;
-	u_int8_t buf[1024];
+	uint8_t buf[1024];
 
 	if (!off_text) {
 		fprintf(stderr, "md: offset must be specified\n");
 		return -1;
 	}
 
-	if (stab_exp(off_text, &offset) < 0) {
+	if (expr_eval(stab, off_text, &offset) < 0) {
 		fprintf(stderr, "md: can't parse offset: %s\n", off_text);
 		return -1;
 	}
@@ -177,12 +183,13 @@ static int cmd_step(cproc_t cp, char **arg)
 static int cmd_run(cproc_t cp, char **arg)
 {
 	device_t dev = cproc_device(cp);
+	stab_t stab = cproc_stab(cp);
 	char *bp_text = get_arg(arg);
 	int bp_addr;
 	device_status_t status;
 
 	if (bp_text) {
-		if (stab_exp(bp_text, &bp_addr) < 0) {
+		if (expr_eval(stab, bp_text, &bp_addr) < 0) {
 			fprintf(stderr, "run: can't parse breakpoint: %s\n",
 				bp_text);
 			return -1;
@@ -221,28 +228,26 @@ static int cmd_run(cproc_t cp, char **arg)
 static int cmd_set(cproc_t cp, char **arg)
 {
 	device_t dev = cproc_device(cp);
+	stab_t stab = cproc_stab(cp);
 	char *reg_text = get_arg(arg);
 	char *val_text = get_arg(arg);
 	int reg;
 	int value = 0;
-	u_int16_t regs[DEVICE_NUM_REGS];
+	uint16_t regs[DEVICE_NUM_REGS];
 
 	if (!(reg_text && val_text)) {
 		fprintf(stderr, "set: must specify a register and a value\n");
 		return -1;
 	}
 
-	while (*reg_text && !isdigit(*reg_text))
-		reg_text++;
-	reg = atoi(reg_text);
-
-	if (stab_exp(val_text, &value) < 0) {
-		fprintf(stderr, "set: can't parse value: %s\n", val_text);
+	reg = dis_reg_from_name(reg_text);
+	if (reg < 0) {
+		fprintf(stderr, "set: unknown register: %s\n", reg_text);
 		return -1;
 	}
 
-	if (reg < 0 || reg >= DEVICE_NUM_REGS) {
-		fprintf(stderr, "set: register out of range: %d\n", reg);
+	if (expr_eval(stab, val_text, &value) < 0) {
+		fprintf(stderr, "set: can't parse value: %s\n", val_text);
 		return -1;
 	}
 
@@ -259,24 +264,25 @@ static int cmd_set(cproc_t cp, char **arg)
 static int cmd_dis(cproc_t cp, char **arg)
 {
 	device_t dev = cproc_device(cp);
+	stab_t stab = cproc_stab(cp);
 	char *off_text = get_arg(arg);
 	char *len_text = get_arg(arg);
 	int offset = 0;
 	int length = 0x40;
-	u_int8_t buf[4096];
+	uint8_t buf[4096];
 
 	if (!off_text) {
 		fprintf(stderr, "dis: offset must be specified\n");
 		return -1;
 	}
 
-	if (stab_exp(off_text, &offset) < 0) {
+	if (expr_eval(stab, off_text, &offset) < 0) {
 		fprintf(stderr, "dis: can't parse offset: %s\n", off_text);
 		return -1;
 	}
 
 	if (len_text) {
-		if (stab_exp(len_text, &length) < 0) {
+		if (expr_eval(stab, len_text, &length) < 0) {
 			fprintf(stderr, "dis: can't parse length: %s\n",
 				len_text);
 			return -1;
@@ -294,50 +300,56 @@ static int cmd_dis(cproc_t cp, char **arg)
 	if (dev->readmem(dev, offset, buf, length) < 0)
 		return -1;
 
-	cproc_disassemble(cp, offset, (u_int8_t *)buf, length);
+	cproc_disassemble(cp, offset, (uint8_t *)buf, length);
 	return 0;
 }
 
-static FILE *hexout_file;
-static u_int16_t hexout_addr;
-static u_int8_t hexout_buf[16];
-static int hexout_len;
+struct hexout_data {
+	FILE            *file;
+	uint16_t       addr;
+	uint8_t        buf[16];
+	int             len;
+};
 
-static int hexout_start(const char *filename)
+static int hexout_start(struct hexout_data *hexout, const char *filename)
 {
-	hexout_file = fopen(filename, "w");
-	if (!hexout_file) {
+	hexout->file = fopen(filename, "w");
+	if (!hexout->file) {
 		perror("hexout: couldn't open output file");
 		return -1;
 	}
 
+	hexout->addr = 0;
+	hexout->len = 0;
+
 	return 0;
 }
 
-static int hexout_flush(void)
+static int hexout_flush(struct hexout_data *hexout)
 {
 	int i;
 	int cksum = 0;
 
-	if (!hexout_len)
+	if (!hexout->len)
 		return 0;
 
-	if (fprintf(hexout_file, ":%02X%04X00", hexout_len, hexout_addr) < 0)
+	if (fprintf(hexout->file, ":%02X%04X00",
+		    hexout->len, hexout->addr) < 0)
 		goto fail;
-	cksum += hexout_len;
-	cksum += hexout_addr & 0xff;
-	cksum += hexout_addr >> 8;
+	cksum += hexout->len;
+	cksum += hexout->addr & 0xff;
+	cksum += hexout->addr >> 8;
 
-	for (i = 0; i < hexout_len; i++) {
-		if (fprintf(hexout_file, "%02X", hexout_buf[i]) < 0)
+	for (i = 0; i < hexout->len; i++) {
+		if (fprintf(hexout->file, "%02X", hexout->buf[i]) < 0)
 			goto fail;
-		cksum += hexout_buf[i];
+		cksum += hexout->buf[i];
 	}
 
-	if (fprintf(hexout_file, "%02X\n", ~(cksum - 1) & 0xff) < 0)
+	if (fprintf(hexout->file, "%02X\n", ~(cksum - 1) & 0xff) < 0)
 		goto fail;
 
-	hexout_len = 0;
+	hexout->len = 0;
 	return 0;
 
 fail:
@@ -345,25 +357,26 @@ fail:
 	return -1;
 }
 
-static int hexout_feed(u_int16_t addr, const u_int8_t *buf, int len)
+static int hexout_feed(struct hexout_data *hexout,
+		       uint16_t addr, const uint8_t *buf, int len)
 {
 	while (len) {
 		int count;
 
-		if ((hexout_addr + hexout_len != addr ||
-		     hexout_len >= sizeof(hexout_buf)) &&
-		    hexout_flush() < 0)
+		if ((hexout->addr + hexout->len != addr ||
+		     hexout->len >= sizeof(hexout->buf)) &&
+		    hexout_flush(hexout) < 0)
 			return -1;
 
-		if (!hexout_len)
-			hexout_addr = addr;
+		if (!hexout->len)
+			hexout->addr = addr;
 
-		count = sizeof(hexout_buf) - hexout_len;
+		count = sizeof(hexout->buf) - hexout->len;
 		if (count > len)
 			count = len;
 
-		memcpy(hexout_buf + hexout_len, buf, count);
-		hexout_len += count;
+		memcpy(hexout->buf + hexout->len, buf, count);
+		hexout->len += count;
 
 		addr += count;
 		buf += count;
@@ -376,26 +389,28 @@ static int hexout_feed(u_int16_t addr, const u_int8_t *buf, int len)
 static int cmd_hexout(cproc_t cp, char **arg)
 {
 	device_t dev = cproc_device(cp);
+	stab_t stab = cproc_stab(cp);
 	char *off_text = get_arg(arg);
 	char *len_text = get_arg(arg);
 	char *filename = *arg;
 	int off;
 	int length;
+	struct hexout_data hexout;
 
 	if (!(off_text && len_text && *filename)) {
 		fprintf(stderr, "hexout: need offset, length and filename\n");
 		return -1;
 	}
 
-	if (stab_exp(off_text, &off) < 0 ||
-	    stab_exp(len_text, &length) < 0)
+	if (expr_eval(stab, off_text, &off) < 0 ||
+	    expr_eval(stab, len_text, &length) < 0)
 		return -1;
 
-	if (hexout_start(filename) < 0)
+	if (hexout_start(&hexout, filename) < 0)
 		return -1;
 
 	while (length) {
-		u_int8_t buf[128];
+		uint8_t buf[128];
 		int count = length;
 
 		if (count > sizeof(buf))
@@ -407,16 +422,16 @@ static int cmd_hexout(cproc_t cp, char **arg)
 			goto fail;
 		}
 
-		if (hexout_feed(off, buf, count) < 0)
+		if (hexout_feed(&hexout, off, buf, count) < 0)
 			goto fail;
 
 		length -= count;
 		off += count;
 	}
 
-	if (hexout_flush() < 0)
+	if (hexout_flush(&hexout) < 0)
 		goto fail;
-	if (fclose(hexout_file) < 0) {
+	if (fclose(hexout.file) < 0) {
 		perror("hexout: error on close");
 		return -1;
 	}
@@ -424,7 +439,7 @@ static int cmd_hexout(cproc_t cp, char **arg)
 	return 0;
 
 fail:
-	fclose(hexout_file);
+	fclose(hexout.file);
 	unlink(filename);
 	return -1;
 }
@@ -432,8 +447,8 @@ fail:
 struct prog_data {
 	device_t        dev;
 
-	u_int8_t        buf[128];
-	u_int16_t       addr;
+	uint8_t        buf[128];
+	uint16_t       addr;
 	int             len;
 	int             have_erased;
 };
@@ -475,7 +490,7 @@ static int prog_flush(struct prog_data *prog)
 }
 
 static int prog_feed(void *user_data,
-		     u_int16_t addr, const u_int8_t *data, int len)
+		     uint16_t addr, const uint8_t *data, int len)
 {
 	struct prog_data *prog = (struct prog_data *)user_data;
 
@@ -513,8 +528,8 @@ static int prog_feed(void *user_data,
 static int cmd_prog(cproc_t cp, char **arg)
 {
 	device_t dev = cproc_device(cp);
+	stab_t stab = cproc_stab(cp);
 	FILE *in;
-	int result = 0;
 	struct prog_data prog;
 
 	if (cproc_prompt_abort(cp, CPROC_MODIFY_SYMS))
@@ -533,14 +548,14 @@ static int cmd_prog(cproc_t cp, char **arg)
 
 	prog_init(&prog, dev);
 
-	if (elf32_check(in)) {
-		result = elf32_extract(in, prog_feed, &prog);
-		stab_clear();
-		elf32_syms(in, stab_set);
-	} else if (ihex_check(in)) {
-		result = ihex_extract(in, prog_feed, &prog);
-	} else {
-		fprintf(stderr, "prog: %s: unknown file type\n", *arg);
+	if (binfile_extract(in, prog_feed, &prog) < 0) {
+		fclose(in);
+		return -1;
+	}
+
+	if (binfile_info(in) & BINFILE_HAS_SYMS) {
+		stab_clear(stab);
+		binfile_syms(in, stab);
 	}
 
 	fclose(in);
@@ -554,7 +569,7 @@ static int cmd_prog(cproc_t cp, char **arg)
 	}
 
 	cproc_unmodify(cp, CPROC_MODIFY_SYMS);
-	return result;
+	return 0;
 }
 
 static const struct cproc_command commands[] = {

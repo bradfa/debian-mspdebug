@@ -28,6 +28,7 @@
 #include <readline/history.h>
 #endif
 
+#include "expr.h"
 #include "cproc.h"
 #include "vector.h"
 #include "stab.h"
@@ -42,6 +43,7 @@ struct cproc {
 	int                     in_reader_loop;
 
 	device_t                device;
+	stab_t                  stab;
 };
 
 static struct cproc_option *find_option(cproc_t cp, const char *name)
@@ -197,7 +199,8 @@ static int cmd_help(cproc_t cp, char **arg)
 	return 0;
 }
 
-static int parse_option(struct cproc_option *o, const char *word)
+static int parse_option(stab_t stab,
+			struct cproc_option *o, const char *word)
 {
 	switch (o->type) {
 	case CPROC_OPTION_BOOL:
@@ -207,7 +210,7 @@ static int parse_option(struct cproc_option *o, const char *word)
 		break;
 
 	case CPROC_OPTION_NUMERIC:
-		return stab_exp(word, &o->data.numeric);
+		return expr_eval(stab, word, &o->data.numeric);
 
 	case CPROC_OPTION_STRING:
 		strncpy(o->data.text, word, sizeof(o->data.text));
@@ -257,7 +260,7 @@ static int cmd_opt(cproc_t cp, char **arg)
 	}
 
 	if (**arg) {
-		if (parse_option(opt, *arg) < 0) {
+		if (parse_option(cp->stab, opt, *arg) < 0) {
 			fprintf(stderr, "opt: can't parse option: %s\n",
 				*arg);
 			return -1;
@@ -321,7 +324,7 @@ static const struct cproc_option built_in_options[] = {
 	}
 };
 
-cproc_t cproc_new(device_t dev)
+cproc_t cproc_new(device_t dev, stab_t st)
 {
 	cproc_t cp = malloc(sizeof(*cp));
 
@@ -331,6 +334,7 @@ cproc_t cproc_new(device_t dev)
 	memset(cp, 0, sizeof(*cp));
 
 	cp->device = dev;
+	cp->stab = st;
 
 	vector_init(&cp->command_list, sizeof(struct cproc_command));
 	vector_init(&cp->option_list, sizeof(struct cproc_option));
@@ -353,12 +357,18 @@ void cproc_destroy(cproc_t cp)
 	cp->device->destroy(cp->device);
 	vector_destroy(&cp->command_list);
 	vector_destroy(&cp->option_list);
+	stab_destroy(cp->stab);
 	free(cp);
 }
 
 device_t cproc_device(cproc_t cp)
 {
 	return cp->device;
+}
+
+stab_t cproc_stab(cproc_t cp)
+{
+	return cp->stab;
 }
 
 int cproc_register_commands(cproc_t cp, const struct cproc_command *cmd,
@@ -552,6 +562,10 @@ static int process_command(cproc_t cp, char *arg, int interactive)
 
 void cproc_reader_loop(cproc_t cp)
 {
+	int old = cp->in_reader_loop;
+
+	cp->in_reader_loop = 1;
+
 	printf("\n");
 	cmd_help(cp, NULL);
 	printf("\n");
@@ -570,6 +584,7 @@ void cproc_reader_loop(cproc_t cp)
 	} while (cproc_prompt_abort(cp, CPROC_MODIFY_SYMS));
 
 	printf("\n");
+	cp->in_reader_loop = old;
 }
 
 int cproc_process_command(cproc_t cp, char *cmd)

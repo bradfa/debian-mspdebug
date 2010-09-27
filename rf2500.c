@@ -29,7 +29,7 @@ struct rf2500_transport {
 	int                     int_number;
 	struct usb_dev_handle   *handle;
 
-	u_int8_t                buf[64];
+	uint8_t                buf[64];
 	int                     len;
 	int                     offset;
 };
@@ -65,9 +65,11 @@ static int open_interface(struct rf2500_transport *tr,
 		return -1;
 	}
 
+#if !(defined(__APPLE__) || defined(WIN32))
 	if (usb_detach_kernel_driver_np(tr->handle, tr->int_number) < 0)
 		perror("rf2500: warning: can't "
 			"detach kernel driver");
+#endif
 
 	if (usb_claim_interface(tr->handle, tr->int_number) < 0) {
 		perror("rf2500: can't claim interface");
@@ -96,12 +98,12 @@ static int open_device(struct rf2500_transport *tr,
 	return -1;
 }
 
-static int usbtr_send(transport_t tr_base, const u_int8_t *data, int len)
+static int usbtr_send(transport_t tr_base, const uint8_t *data, int len)
 {
 	struct rf2500_transport *tr = (struct rf2500_transport *)tr_base;
 
 	while (len) {
-		u_int8_t pbuf[256];
+		uint8_t pbuf[256];
 		int plen = len > 255 ? 255 : len;
 		int txlen = plen + 1;
 
@@ -122,7 +124,7 @@ static int usbtr_send(transport_t tr_base, const u_int8_t *data, int len)
 		debug_hexdump("USB transfer out", pbuf, txlen);
 #endif
 		if (usb_bulk_write(tr->handle, USB_FET_OUT_EP,
-			(const char *)pbuf, txlen, 10000) < 0) {
+			(char *)pbuf, txlen, 10000) < 0) {
 			perror("rf2500: can't send data");
 			return -1;
 		}
@@ -134,7 +136,7 @@ static int usbtr_send(transport_t tr_base, const u_int8_t *data, int len)
 	return 0;
 }
 
-static int usbtr_recv(transport_t tr_base, u_int8_t *databuf, int max_len)
+static int usbtr_recv(transport_t tr_base, uint8_t *databuf, int max_len)
 {
 	struct rf2500_transport *tr = (struct rf2500_transport *)tr_base;
 	int rlen;
