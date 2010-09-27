@@ -16,6 +16,8 @@
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
 CC = gcc
+INSTALL = /usr/bin/install
+PREFIX ?= /usr/local
 
 all: mspdebug
 
@@ -23,10 +25,14 @@ clean:
 	/bin/rm -f *.o
 	/bin/rm -f mspdebug
 
+install: mspdebug mspdebug.man
+	$(INSTALL) -o root -m 0755 -s mspdebug $(PREFIX)/bin/mspdebug
+	$(INSTALL) -o root -m 0644 mspdebug.man $(PREFIX)/share/man/man1/mspdebug.1
+
 .SUFFIXES: .c .o
 
 mspdebug: main.o fet.o rf2500.o dis.o uif.o ihex.o elf32.o stab.o util.o \
-	  bsl.o sim.o
+	  bsl.o sim.o symmap.o
 	$(CC) $(CFLAGS) -o $@ $^ -lusb
 
 .c.o:

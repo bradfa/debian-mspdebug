@@ -1,4 +1,4 @@
-/* MSPDebug - debugging tool for the eZ430
+/* MSPDebug - debugging tool for MSP430 MCUs
  * Copyright (C) 2009, 2010 Daniel Beer
  *
  * This program is free software; you can redistribute it and/or modify
@@ -21,7 +21,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#include <signal.h>
 #include <unistd.h>
 
 #include "dis.h"
@@ -111,9 +110,14 @@ static int cmd_md(char **arg)
 		return -1;
 	}
 
-	if (len_text && stab_parse(len_text, &length) < 0) {
-		fprintf(stderr, "md: can't parse length: %s\n", len_text);
-		return -1;
+	if (len_text) {
+		if (stab_parse(len_text, &length) < 0) {
+			fprintf(stderr, "md: can't parse length: %s\n",
+				len_text);
+			return -1;
+		}
+	} else if (offset + length > 0x10000) {
+		length = 0x10000 - offset;
 	}
 
 	if (offset < 0 || length <= 0 || (offset + length) > 0x10000) {
@@ -171,7 +175,7 @@ static void disassemble(u_int16_t offset, u_int8_t *data, int length)
 		}
 
 		if (retval >= 0) {
-			char buf[32];
+			char buf[128];
 
 			dis_format(buf, sizeof(buf), &insn);
 			printf("%s", buf);
@@ -203,9 +207,14 @@ static int cmd_dis(char **arg)
 		return -1;
 	}
 
-	if (len_text && stab_parse(len_text, &length) < 0) {
-		fprintf(stderr, "dis: can't parse length: %s\n", len_text);
-		return -1;
+	if (len_text) {
+		if (stab_parse(len_text, &length) < 0) {
+			fprintf(stderr, "dis: can't parse length: %s\n",
+				len_text);
+			return -1;
+		}
+	} else if (offset + length > 0x10000) {
+		length = 0x10000 - offset;
 	}
 
 	if (offset < 0 || length <= 0 || length > sizeof(buf) ||
@@ -446,8 +455,17 @@ static int cmd_set(char **arg)
 
 static int cmd_step(char **arg)
 {
-	if (msp430_dev->control(DEVICE_CTL_STEP) < 0)
-		return -1;
+	char *count_text = get_arg(arg);
+	int count = 1;
+
+	if (count_text)
+		count = atoi(count_text);
+
+	while (count > 0) {
+		if (msp430_dev->control(DEVICE_CTL_STEP) < 0)
+			return -1;
+		count--;
+	}
 
 	return cmd_regs(NULL);
 }
@@ -604,6 +622,8 @@ static int cmd_syms(char **arg)
 
 	if (elf32_check(in))
 		result = elf32_syms(in);
+	else if (symmap_check(in))
+		result = symmap_syms(in);
 	else
 		fprintf(stderr, "syms: %s: unknown file type\n", *arg);
 
@@ -616,7 +636,7 @@ static const struct command all_commands[] = {
 "= <expression>\n"
 "    Evaluate an expression using the symbol table.\n"},
 	{"dis",		cmd_dis,
-"dis <address> <range>\n"
+"dis <address> [length]\n"
 "    Disassemble a section of memory.\n"},
 	{"help",	cmd_help,
 "help [command]\n"
@@ -626,7 +646,7 @@ static const struct command all_commands[] = {
 "hexout <address> <length> <filename.hex>\n"
 "    Save a region of memory into a HEX file.\n"},
 	{"md",		cmd_md,
-"md <address> <length>\n"
+"md <address> [length]\n"
 "    Read the specified number of bytes from memory at the given address,\n"
 "    and display a hexdump.\n"},
 	{"nosyms",	cmd_nosyms,
@@ -650,7 +670,7 @@ static const struct command all_commands[] = {
 "set <register> <value>\n"
 "    Change the value of a CPU register.\n"},
 	{"step",	cmd_step,
-"step\n"
+"step [count]\n"
 "    Single-step the CPU, and display the register state.\n"},
 	{"syms",	cmd_syms,
 "syms <filename>\n"
@@ -724,10 +744,6 @@ static int cmd_help(char **arg)
 	return 0;
 }
 
-static void sigint_handler(int signum)
-{
-}
-
 static void process_command(char *arg)
 {
 	const char *cmd_text;
@@ -746,14 +762,9 @@ static void process_command(char *arg)
 
 static void reader_loop(void)
 {
-	const static struct sigaction siga = {
-		.sa_handler = sigint_handler,
-		.sa_flags = 0
-	};
-
 	printf("\n");
 	cmd_help(NULL);
-	sigaction(SIGINT, &siga, NULL);
+	ctrlc_init();
 
 	for (;;) {
 		char buf[128];
@@ -782,8 +793,13 @@ static void reader_loop(void)
 static void usage(const char *progname)
 {
 	fprintf(stderr,
-"Usage: %s [-u device] [-j] [-B] [-s] [-v voltage] [command ...]\n"
+"Usage: %s -R [-v voltage] [command ...]\n"
+"       %s -u <device> [-j] [-v voltage] [command ...]\n"
+"       %s -B <device> [command ...]\n"
+"       %s -s [command ...]\n"
 "\n"
+"    -R\n"
+"        Open the first available RF2500 device on the USB bus.\n"
 "    -u device\n"
 "        Open the given tty device (MSP430 UIF compatible devices).\n"
 "    -j\n"
@@ -793,14 +809,19 @@ static void usage(const char *progname)
 "    -B device\n"
 "        Debug the FET itself through the bootloader.\n"
 "    -s\n"
-"        Start in simulation mode (only memory IO is allowed).\n"
+"        Start in simulation mode.\n"
 "\n"
 "By default, the first RF2500 device on the USB bus is opened.\n"
 "\n"
 "If commands are given, they will be executed. Otherwise, an interactive\n"
 "command reader is started.\n",
-	progname);
+		progname, progname, progname, progname);
 }
+
+#define MODE_RF2500             0x01
+#define MODE_UIF                0x02
+#define MODE_UIF_BSL            0x04
+#define MODE_SIM                0x08
 
 int main(int argc, char **argv)
 {
@@ -810,20 +831,25 @@ int main(int argc, char **argv)
 	int opt;
 	int flags = 0;
 	int want_jtag = 0;
-	int want_sim = 0;
 	int vcc_mv = 3000;
+	int mode = 0;
 
 	puts(
-"MSPDebug version 0.4 - debugging tool for the eZ430\n"
-"Copyright (C) 2009, 2010 Daniel Beer <dlbeer@gmail.com>\n"
+"MSPDebug version 0.5 - debugging tool for MSP430 MCUs\n"
+"Copyright (C) 2009, 2010 Daniel Beer <daniel@tortek.co.nz>\n"
 "This is free software; see the source for copying conditions.  There is NO\n"
 "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n");
 
 	/* Parse arguments */
-	while ((opt = getopt(argc, argv, "u:jv:B:s")) >= 0)
+	while ((opt = getopt(argc, argv, "u:jv:B:sR?")) >= 0)
 		switch (opt) {
+		case 'R':
+			mode |= MODE_RF2500;
+			break;
+
 		case 'u':
 			uif_device = optarg;
+			mode |= MODE_UIF;
 			break;
 
 		case 'v':
@@ -836,25 +862,44 @@ int main(int argc, char **argv)
 
 		case 'B':
 			bsl_device = optarg;
+			mode |= MODE_UIF_BSL;
 			break;
 
 		case 's':
-			want_sim = 1;
+			mode |= MODE_SIM;
 			break;
 
-		default:
+		case '?':
 			usage(argv[0]);
+			return 0;
+
+		default:
+			fprintf(stderr, "Invalid argument: %c\n"
+				"Try -? for help.\n", opt);
 			return -1;
 		}
 
+	/* Check for incompatible arguments */
+	if (mode & (mode - 1)) {
+		fprintf(stderr, "Multiple incompatible options specified.\n"
+			"Try -? for help.\n");
+		return -1;
+	}
+
+	if (!mode) {
+		fprintf(stderr, "You need to specify an operating mode.\n"
+			"Try -? for help.\n");
+		return -1;
+	}
+
 	/* Open a device */
-	if (want_sim) {
+	if (mode == MODE_SIM) {
 		msp430_dev = sim_open();
-	} else if (bsl_device) {
+	} else if (mode == MODE_UIF_BSL) {
 		msp430_dev = bsl_open(bsl_device);
-	} else {
+	} else if (mode == MODE_RF2500 || mode == MODE_UIF) {
 		/* Open the appropriate transport */
-		if (uif_device) {
+		if (mode == MODE_UIF) {
 			trans = uif_open(uif_device);
 		} else {
 			trans = rf2500_open();

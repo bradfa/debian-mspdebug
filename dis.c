@@ -343,11 +343,11 @@ static void find_emulated_ops(struct msp430_instruction *insn)
 		break;
 
 	case MSP430_OP_SUB:
-		if (insn->dst_mode == MSP430_AMODE_IMMEDIATE) {
-			if (insn->dst_addr == 1) {
+		if (insn->src_mode == MSP430_AMODE_IMMEDIATE) {
+			if (insn->src_addr == 1) {
 				insn->op = MSP430_OP_DEC;
 				insn->itype = MSP430_ITYPE_SINGLE;
-			} else if (insn->dst_addr == 2) {
+			} else if (insn->src_addr == 2) {
 				insn->op = MSP430_OP_DECD;
 				insn->itype = MSP430_ITYPE_SINGLE;
 			}
@@ -556,7 +556,7 @@ static int format_operand(char *buf, int max_len,
 		return format_addr(buf, max_len, "&", addr);
 
 	case MSP430_AMODE_INDIRECT:
-		return format_addr(buf, max_len, "@", addr);
+		return snprintf(buf, max_len, "@%s", msp430_reg_names[reg]);
 
 	case MSP430_AMODE_INDIRECT_INC:
 		return snprintf(buf, max_len, "@%s+", msp430_reg_names[reg]);
