@@ -36,14 +36,17 @@ clean:
 	/bin/rm -f mspdebug
 
 install: mspdebug mspdebug.man
-	$(INSTALL) -D -m 0755 -s mspdebug $(PREFIX)/bin/mspdebug
-	$(INSTALL) -D -m 0644 mspdebug.man $(PREFIX)/share/man/man1/mspdebug.1
+	mkdir -p $(PREFIX)/bin
+	mkdir -p $(PREFIX)/share/man/man1
+	$(INSTALL) -m 0755 -s mspdebug $(PREFIX)/bin/mspdebug
+	$(INSTALL) -m 0644 mspdebug.man $(PREFIX)/share/man/man1/mspdebug.1
 
 .SUFFIXES: .c .o
 
-mspdebug: main.o fet.o rf2500.o dis.o uif.o ihex.o elf32.o stab.o util.o \
-	  bsl.o sim.o symmap.o gdb.o btree.o rtools.o sym.o devcmd.o \
-	  cproc.o vector.o cproc_util.o expr.o fet_error.o binfile.o fet_db.o
+mspdebug: main.o fet.o rf2500.o dis.o uif.o olimex.o ihex.o elf32.o stab.o \
+          util.o bsl.o sim.o symmap.o gdb.o btree.o rtools.o sym.o devcmd.o \
+	  cproc.o vector.o cproc_util.o expr.o fet_error.o binfile.o fet_db.o \
+	  usbutil.o
 	$(CC) $(LDFLAGS) -o $@ $^ -lusb $(READLINE_LIBS)
 
 .c.o:

@@ -1,18 +1,13 @@
-.TH mspdebug 1 "22 May 2010" "Version 0.8"
+.TH mspdebug 1 "29 Jun 2010" "Version 0.9"
 .SH NAME
 MSPDebug - debugging tool for MSP430 MCUs
 .SH SYNOPSIS
-\fBmspdebug\fR [options] \-R [\-v \fIvoltage\fR] [\fIcommand\fR ...]
-.br
-\fBmspdebug\fR [options] \-u \fIdevice\fR [\-j] [\-v \fIvoltage\fR] [\fIcommand\fR ...]
-.br
-\fBmspdebug\fR [options] \-B \fIdevice\fR [\fIcommand\fR ...]
-.br
-\fBmspdebug\fR [options] \-s [\fIcommand\fR ...]
+\fBmspdebug\fR [options] \fIdriver\fR [\fIcommand\fR ...]
 .SH DESCRIPTION
 MSPDebug is a command-line tool designed for debugging and programming
-the MSP430 family of MCUs. It supports the eZ430-F2013, eZ430-RF2500
-and FET430UIF programming tools.
+the MSP430 family of MCUs. It supports the eZ430-F2013, eZ430-RF2500,
+FET430UIF and Olimex MSP-JTAG-TINY programming tools, as well as a
+simulation mode.
 
 When started with appropriate options, MSPDebug will attempt to
 connect to the debugging tool specified and identify the device under
@@ -35,36 +30,41 @@ commands are specified on the end of the command-line, then they are
 executed after connecting to the device, and the interactive prompt is
 not started. See the section labelled \fBCOMMANDS\fR for more
 information.
-.IP "\-R"
-Connect to an eZ430-RF2500 device. The USB bus will be searched for
-the first available device. You must have write permission for usbfs
-in order for this to work. You can achieve this by running as root
-(not recommended), or by remounting usbfs using the
-devuid/devgid/devmode options.
 .IP "\-v \fIvoltage\fR"
 Set the programming voltage. The voltage should be specified as an integer
 in millivolts. It defaults to 3000 (3.0 V).
-.IP "\-u \fIdevice\fR"
-Connect to an eZ430-F2013 or a FET430UIF device. The device argument
-should be the filename of the appropriate tty device. The TI serial
-converter chips on these devices are supported by newer versions of the
-Linux kernel, and should appear as /dev/tty\fIXX\fR when attached.
 .IP "\-j"
 Use JTAG instead of Spy-Bi-Wire to communicate with the MSP430. This
 option only works on FET430UIF devices.
-.IP "\-B \fIdevice\fR"
-Connect to the bootloader on a FET430UIF device. These devices contain
-MSP430F419 chips. By sending a special command sequence, you can obtain
-access to the bootloader and inspect memory on the MSP430F419 in the
-programming device itself.
-
-Currently, only memory inspection is supported. CPU control via the
-bootloader is not possible. Memory erase and write is possible, but is
-currently not implemented, for lack of ability to test it. If implemented,
-this would allow firmware updates to FET430UIF devices.
-
-The argument should be the filename of the appropriate tty device.
-.IP "\-s"
+.IP "\-d \fIdevice\fR"
+Specify that the driver should connect via a tty device rather than USB.
+The supported connection methods vary depending on the driver. See the
+section \fBDRIVERS\fR below for details.
+.IP "\-U \fIbus\fR:\fIdevice\fR"
+Specify a particular USB device to connect to. Without this option,
+the first device of the appropriate type is opened.
+.IP "\-n"
+Do not process the startup file (~/.mspdebug).
+.IP "\-\-help"
+Display a brief help message and exit.
+.IP "\-\-fet\-list"
+Display a list of devices supported by the FET driver (the driver used
+for \fB\-R\fR and \fB\-u\fR operating modes).
+.IP "\-\-fet\-force\-id \fIstring\fR"
+When using a FET device, force the connected chip to be recognised by
+MSPDebug as one of the given type during initialization. This overrides
+the device ID returned by the FET.
+.IP "\-\-usb\-list"
+List available USB devices and exit.
+.SH DRIVERS
+A driver name must be specified on the command line for MSPDebug to
+connect to. Valid driver names are listed here.
+.IP "\fBrf2500\fR"
+Connect to an eZ430-RF2500 device. Only USB connection is supported.
+.IP "\fBolimex\fR"
+Connect to an Olimex MSP-JTAG-TINY device. Both USB and tty access are
+supported.
+.IP "\fBsim\fR"
 Do not connect to any hardware device, but instead start in simulation
 mode. A 64k buffer is allocated to simulate the device memory. The CPU
 core alone is emulated (no peripheral emulation).
@@ -84,17 +84,25 @@ execution.
 This mode is intended for testing of changes to MSPDebug, and for
 aiding the disassembly of MSP430 binaries (as all binary and symbol
 table formats are still usable in this mode).
-.IP "\-n"
-Do not process the startup file (~/.mspdebug).
-.IP "\-\-help"
-Display a brief help message and exit.
-.IP "\-\-fet\-list"
-Display a list of devices supported by the FET driver (the driver used
-for \fB\-R\fR and \fB\-u\fR operating modes).
-.IP "\-\-fet\-force\-id \fIstring\fR"
-When using a FET device, force the connected chip to be recognised by
-MSPDebug as one of the given type during initialization. This overrides
-the device ID returned by the FET.
+.IP "\fBuif\fR"
+Connect to an eZ430-F2013 or a FET430UIF device. The device argument
+should be the filename of the appropriate tty device. The TI serial
+converter chips on these devices are supported by newer versions of the
+Linux kernel, and should appear as /dev/tty\fIXX\fR when attached.
+
+USB connection is not supported for this driver.
+.IP "\fBuif-bsl\fR"
+Connect to the bootloader on a FET430UIF device. These devices contain
+MSP430F419 chips. By sending a special command sequence, you can obtain
+access to the bootloader and inspect memory on the MSP430F419 in the
+programming device itself.
+
+Currently, only memory inspection is supported. CPU control via the
+bootloader is not possible. Memory erase and write is possible, but is
+currently not implemented, for lack of ability to test it. If implemented,
+this would allow firmware updates to FET430UIF devices.
+
+USB connection is not supported for this driver.
 .SH COMMANDS
 MSPDebug can accept commands either through an interactive prompt, or
 non-interactively when specified on the command line. The supported
@@ -349,6 +357,10 @@ The following are all valid examples of address expressions:
 MSPDebug's behaviour can be configured via the following variables:
 .IP "\fBcolor\fR (boolean)"
 If true, MSPDebug will colorize debugging output.
+.IP "\fBgdb_loop\fR (boolean)"
+Automatically restart the GDB server after disconnection. If this
+option is set, then the GDB server keeps running until an error occurs,
+or the user interrupts with Ctrl+C.
 .SH BUGS
 If you find any bugs, you should report them to the author at
 daniel@tortek.co.nz. It would help if you could include a transcript

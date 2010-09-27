@@ -28,6 +28,11 @@
 #include "uif.h"
 #include "util.h"
 
+#ifdef __APPLE__
+#define B460800 460800
+#define B500000 500000
+#endif
+
 struct uif_transport {
 	struct transport        base;
 
@@ -75,7 +80,7 @@ static void serial_destroy(transport_t tr_base)
 	free(tr);
 }
 
-transport_t uif_open(const char *device)
+transport_t uif_open(const char *device, int is_olimex)
 {
 	struct uif_transport *tr = malloc(sizeof(*tr));
 
@@ -90,7 +95,7 @@ transport_t uif_open(const char *device)
 
 	printf("Trying to open UIF on %s...\n", device);
 
-	tr->serial_fd = open_serial(device, B460800);
+	tr->serial_fd = open_serial(device, is_olimex ? B500000 : B460800);
 	if (tr->serial_fd < 0) {
 		fprintf(stderr, "uif: can't open serial device: %s: %s\n",
 			device, strerror(errno));

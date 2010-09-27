@@ -1,5 +1,6 @@
 /* MSPDebug - debugging tool for the eZ430
  * Copyright (C) 2009, 2010 Daniel Beer
+ * Copyright (C) 2010 Peter Jansen
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,17 +21,17 @@
 #include <string.h>
 #include <usb.h>
 
-#include "rf2500.h"
+#include "olimex.h"
 #include "util.h"
 #include "usbutil.h"
 
-struct rf2500_transport {
+struct olimex_transport {
 	struct transport        base;
 
 	int                     int_number;
 	struct usb_dev_handle   *handle;
 
-	uint8_t                buf[64];
+	uint8_t                 buf[64];
 	int                     len;
 	int                     offset;
 };
@@ -46,43 +47,85 @@ struct rf2500_transport {
  * one transfer.
  */
 
-#define USB_FET_VENDOR			0x0451
-#define USB_FET_PRODUCT			0xf432
-#define USB_FET_INTERFACE_CLASS		3
+#define USB_FET_VENDOR			0x15ba
+#define USB_FET_PRODUCT			0x0002
+#define USB_FET_INTERFACE_CLASS		255
 
 #define USB_FET_IN_EP			0x81
 #define USB_FET_OUT_EP			0x01
 
-static int open_interface(struct rf2500_transport *tr,
+#define CP210x_REQTYPE_HOST_TO_DEVICE   0x41
+
+#define CP210X_IFC_ENABLE               0x00
+#define CP210X_SET_BAUDDIV              0x01
+#define CP210X_SET_MHS                  0x07
+
+#define TIMEOUT 	                1000
+
+static int open_interface(struct olimex_transport *tr,
 			  struct usb_device *dev, int ino)
 {
-	printf("Trying to open interface %d on %s\n", ino, dev->filename);
+#if !(defined (__APPLE__) || defined(WIN32))
+	int drv;
+	char drName[256];
+#endif
+
+	printf(__FILE__": Trying to open interface %d on %s\n",
+	       ino, dev->filename);
 
 	tr->int_number = ino;
 
 	tr->handle = usb_open(dev);
 	if (!tr->handle) {
-		perror("rf2500: can't open device");
+		perror(__FILE__": can't open device");
 		return -1;
 	}
 
 #if !(defined(__APPLE__) || defined(WIN32))
-	if (usb_detach_kernel_driver_np(tr->handle, tr->int_number) < 0)
-		perror("rf2500: warning: can't "
-			"detach kernel driver");
+	drv = usb_get_driver_np(tr->handle, tr->int_number, drName,
+				sizeof(drName));
+	printf(__FILE__" : driver %d\n", drv);
+	if (drv >= 0) {
+		if (usb_detach_kernel_driver_np(tr->handle,
+						tr->int_number) < 0)
+			perror(__FILE__": warning: can't detach "
+			       "kernel driver");
+	}
 #endif
 
 	if (usb_claim_interface(tr->handle, tr->int_number) < 0) {
-		perror("rf2500: can't claim interface");
+		perror(__FILE__": can't claim interface");
 		usb_close(tr->handle);
 		return -1;
 	}
 
+	int ret = usb_control_msg(tr->handle, CP210x_REQTYPE_HOST_TO_DEVICE,
+				  CP210X_IFC_ENABLE, 0x1, 0, NULL, 0, 300);
+#ifdef DEBUG_OLIMEX
+	printf(__FILE__": %s : Sending control message ret %d\n",
+	       __FUNCTION__, ret);
+#endif
+	/* Set the baud rate to 500000 bps */
+	ret = usb_control_msg(tr->handle, CP210x_REQTYPE_HOST_TO_DEVICE,
+			      CP210X_SET_BAUDDIV, 0x7, 0, NULL, 0, 300);
+#ifdef DEBUG_OLIMEX
+	printf(__FILE__": %s : Sending control message ret %d\n",
+	       __FUNCTION__, ret);
+#endif
+	/* Set the modem control settings.
+	 * Set RTS, DTR and WRITE_DTR, WRITE_RTS
+	 */
+	ret = usb_control_msg(tr->handle, CP210x_REQTYPE_HOST_TO_DEVICE,
+			      CP210X_SET_MHS, 0x303, 0, NULL, 0, 300);
+#ifdef DEBUG_OLIMEX
+	printf(__FILE__": %s : Sending control message ret %d\n",
+	       __FUNCTION__, ret);
+#endif
+
 	return 0;
 }
 
-static int open_device(struct rf2500_transport *tr,
-		       struct usb_device *dev)
+static int open_device(struct olimex_transport *tr, struct usb_device *dev)
 {
 	struct usb_config_descriptor *c = &dev->config[0];
 	int i;
@@ -101,37 +144,22 @@ static int open_device(struct rf2500_transport *tr,
 
 static int usbtr_send(transport_t tr_base, const uint8_t *data, int len)
 {
-	struct rf2500_transport *tr = (struct rf2500_transport *)tr_base;
+	struct olimex_transport *tr = (struct olimex_transport *)tr_base;
+
+	int sent;
 
 	while (len) {
-		uint8_t pbuf[256];
-		int plen = len > 255 ? 255 : len;
-		int txlen = plen + 1;
-
-		memcpy(pbuf + 1, data, plen);
-
-		/* This padding is needed to work around an apparent bug in
-		 * the RF2500 FET. Without this, the device hangs.
-		 */
-		if (txlen > 32 && (txlen & 0x3f))
-			while (txlen < 255 && (txlen & 0x3f))
-				pbuf[txlen++] = 0xff;
-		else if (txlen > 16 && (txlen & 0xf))
-			while (txlen < 255 && (txlen & 0xf) != 1)
-				pbuf[txlen++] = 0xff;
-		pbuf[0] = txlen - 1;
-
-#ifdef DEBUG_USBTR
-		debug_hexdump("USB transfer out", pbuf, txlen);
+#ifdef DEBUG_OLIMEX
+		debug_hexdump(__FILE__": USB transfer out", data, len);
 #endif
-		if (usb_bulk_write(tr->handle, USB_FET_OUT_EP,
-			(char *)pbuf, txlen, 10000) < 0) {
-			perror("rf2500: can't send data");
+		sent = usb_bulk_write(tr->handle, USB_FET_OUT_EP,
+				      (char *)data, len, TIMEOUT);
+		if (sent < 0) {
+			perror(__FILE__": can't send data");
 			return -1;
 		}
 
-		data += plen;
-		len -= plen;
+		len -= sent;
 	}
 
 	return 0;
@@ -139,53 +167,49 @@ static int usbtr_send(transport_t tr_base, const uint8_t *data, int len)
 
 static int usbtr_recv(transport_t tr_base, uint8_t *databuf, int max_len)
 {
-	struct rf2500_transport *tr = (struct rf2500_transport *)tr_base;
+	struct olimex_transport *tr = (struct olimex_transport *)tr_base;
 	int rlen;
 
-	if (tr->offset >= tr->len) {
-		if (usb_bulk_read(tr->handle, USB_FET_IN_EP,
-				(char *)tr->buf, sizeof(tr->buf),
-				10000) < 0) {
-			perror("rf2500: can't receive data");
-			return -1;
-		}
-
-#ifdef DEBUG_USBTR
-		debug_hexdump("USB transfer in", tr->buf, 64);
+#ifdef DEBUG_OLIMEX
+	printf(__FILE__": %s : read max %d\n", __FUNCTION__, max_len);
 #endif
 
-		tr->len = tr->buf[1] + 2;
-		if (tr->len > sizeof(tr->buf))
-			tr->len = sizeof(tr->buf);
-		tr->offset = 2;
+	rlen = usb_bulk_read(tr->handle, USB_FET_IN_EP, (char *)databuf,
+			     max_len, TIMEOUT);
+
+#ifdef DEBUG_OLIMEX
+	printf(__FILE__": %s : read %d\n", __FUNCTION__, rlen);
+#endif
+
+	if (rlen < 0) {
+		perror(__FILE__": can't receive data");
+		return -1;
 	}
 
-	rlen = tr->len - tr->offset;
-	if (rlen > max_len)
-		rlen = max_len;
-	memcpy(databuf, tr->buf + tr->offset, rlen);
-	tr->offset += rlen;
+#ifdef DEBUG_OLIMEX
+	debug_hexdump(__FILE__": USB transfer in", databuf, rlen);
+#endif
 
 	return rlen;
 }
 
 static void usbtr_destroy(transport_t tr_base)
 {
-	struct rf2500_transport *tr = (struct rf2500_transport *)tr_base;
+	struct olimex_transport *tr = (struct olimex_transport *)tr_base;
 
 	usb_release_interface(tr->handle, tr->int_number);
 	usb_close(tr->handle);
 	free(tr);
 }
 
-transport_t rf2500_open(const char *devpath)
+transport_t olimex_open(const char *devpath)
 {
-	struct rf2500_transport *tr = malloc(sizeof(*tr));
+	struct olimex_transport *tr = malloc(sizeof(*tr));
 	struct usb_device *dev;
 	char buf[64];
 
 	if (!tr) {
-		perror("rf2500: can't allocate memory");
+		perror(__FILE__": can't allocate memory");
 		return NULL;
 	}
 
@@ -208,7 +232,7 @@ transport_t rf2500_open(const char *devpath)
 	}
 
 	if (open_device(tr, dev) < 0) {
-		fprintf(stderr, "rf2500: failed to open RF2500 device\n");
+		fprintf(stderr, __FILE__ ": failed to open Olimex device\n");
 		return NULL;
 	}
 

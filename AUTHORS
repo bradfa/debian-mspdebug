@@ -8,3 +8,11 @@ Doug Forman <doug.dougforman@gmail.com>:
 Robert Kavaler <kavaler@diva.com>:
 	* Author of uif430, from which much of the code in fet.c is
           derived (uif430 is available from www.relavak.com).
+
+Hans Nieuwenhuis <vzzbx@xs4all.nl>:
+	* Support for MSP430F2132.
+
+Peter Jansen <pwjansen@yahoo.com>:
+        * Support for MSP430F169.
+        * Testing and analysis for Olimex MSP430-JTAG-TINY.
+        * libusb driver for Olimex MSP430-JTAG-TINY.

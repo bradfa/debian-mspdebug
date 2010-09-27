@@ -38,7 +38,7 @@ struct fet_device {
 	struct device                   base;
 
 	transport_t                     transport;
-	int                             is_rf2500;
+	int                             proto_flags;
 	int                             version;
 	int                             have_breakpoint;
 
@@ -104,6 +104,10 @@ struct fet_device {
 #define C_READI2C               0x22
 #define C_WRITEI2C              0x23
 #define C_ENTERBOOTLOADER       0x24
+
+#define C_IDENT1                0x28
+#define C_IDENT2                0x29
+#define C_IDENT3                0x2b
 
 /* Constants for parameters of various FET commands */
 #define FET_CONFIG_VERIFICATION 0
@@ -310,15 +314,22 @@ too_short:
 	return -1;
 }
 
+/* Receive a packet from the FET. The usual format is:
+ *     <length (2 bytes)> <data> <checksum>
+ *
+ * The length is that of the data + checksum. Olimex JTAG adapters follow
+ * all packets with a trailing 0x7e byte, which must be discarded.
+ */
 static int recv_packet(struct fet_device *dev)
 {
+	int pkt_extra = (dev->proto_flags & FET_PROTO_OLIMEX) ? 3 : 2;
 	int plen = LE_WORD(dev->fet_buf, 0);
 
 	/* If there's a packet still here from last time, get rid of it */
-	if (dev->fet_len >= plen + 2) {
-		memmove(dev->fet_buf, dev->fet_buf + plen + 2,
-			dev->fet_len - plen - 2);
-		dev->fet_len -= plen + 2;
+	if (dev->fet_len >= plen + pkt_extra) {
+		memmove(dev->fet_buf, dev->fet_buf + plen + pkt_extra,
+			dev->fet_len - plen - pkt_extra);
+		dev->fet_len -= plen + pkt_extra;
 	}
 
 	/* Keep adding data to the buffer until we have a complete packet */
@@ -326,7 +337,7 @@ static int recv_packet(struct fet_device *dev)
 		int len;
 
 		plen = LE_WORD(dev->fet_buf, 0);
-		if (dev->fet_len >= plen + 2)
+		if (dev->fet_len >= plen + pkt_extra)
 			return parse_packet(dev, plen);
 
 		len = dev->transport->recv(dev->transport,
@@ -401,7 +412,9 @@ static int send_command(struct fet_device *dev, int command_code,
 	/* Copy into buf, escaping special characters and adding
 	 * delimeters.
 	 */
-	buf[i++] = 0x7e;
+	if (!(dev->proto_flags & FET_PROTO_OLIMEX))
+		buf[i++] = 0x7e;
+
 	for (j = 0; j < len; j++) {
 		char c = datapkt[j];
 
@@ -434,7 +447,7 @@ static int xfer(struct fet_device *dev,
 		params[i] = va_arg(ap, unsigned int);
 	va_end(ap);
 
-	if (data && dev->is_rf2500) {
+	if (data && (dev->proto_flags & FET_PROTO_RF2500)) {
 		assert (nparams + 1 <= MAX_PARAMS);
 		params[nparams++] = datalen;
 
@@ -489,8 +502,8 @@ static int identify_new(struct fet_device *dev, const char *force_id)
 {
 	const struct fet_db_record *r;
 
-	if (xfer(dev, 0x28, NULL, 0, 2, 0, 0) < 0) {
-		fprintf(stderr, "fet: command 0x28 failed\n");
+	if (xfer(dev, C_IDENT1, NULL, 0, 2, 0, 0) < 0) {
+		fprintf(stderr, "fet: command C_IDENT1 failed\n");
 		return -1;
 	}
 
@@ -520,13 +533,13 @@ static int identify_new(struct fet_device *dev, const char *force_id)
 	printf("Device: %s\n", r->name);
 	printf("Code memory starts at 0x%04x\n", dev->code_start);
 
-	if (xfer(dev, 0x2b, r->msg2b_data, FET_DB_MSG2B_LEN, 0) < 0)
-		fprintf(stderr, "fet: warning: message 0x2b failed\n");
+	if (xfer(dev, C_IDENT3, r->msg2b_data, r->msg2b_len, 0) < 0)
+		fprintf(stderr, "fet: warning: message C_IDENT3 failed\n");
 
-	if (xfer(dev, 0x29, r->msg29_data, FET_DB_MSG29_LEN,
+	if (xfer(dev, C_IDENT2, r->msg29_data, FET_DB_MSG29_LEN,
 		 3, r->msg29_params[0], r->msg29_params[1],
 		 r->msg29_params[2]) < 0) {
-		fprintf(stderr, "fet: message 0x29 failed\n");
+		fprintf(stderr, "fet: message C_IDENT2 failed\n");
 		return -1;
 	}
 
@@ -535,6 +548,9 @@ static int identify_new(struct fet_device *dev, const char *force_id)
 
 static int do_identify(struct fet_device *dev, const char *force_id)
 {
+	if (dev->proto_flags & FET_PROTO_OLIMEX)
+		return identify_new(dev, force_id);
+
 	if (dev->version < 20300000)
 		return identify_old(dev);
 
@@ -771,6 +787,38 @@ static int fet_breakpoint(device_t dev_base, int enabled, uint16_t addr)
 	return 0;
 }
 
+static int do_configure(struct fet_device *dev)
+{
+	if (dev->proto_flags & FET_PROTO_SPYBIWIRE) {
+		if (!xfer(dev, C_CONFIGURE, NULL, 0,
+			  2, FET_CONFIG_PROTOCOL, 1)) {
+			printf("Configured for Spy-Bi-Wire\n");
+			return 0;
+		}
+
+		fprintf(stderr, "fet: Spy-Bi-Wire configuration failed\n");
+		return -1;
+	}
+
+	if (!xfer(dev, C_CONFIGURE, NULL, 0,
+		  2, FET_CONFIG_PROTOCOL, 2)) {
+		printf("Configured for JTAG (2)\n");
+		return 0;
+	}
+
+	fprintf(stderr, "fet: warning: JTAG configuration failed -- "
+		"retrying\n");
+
+	if (!xfer(dev, C_CONFIGURE, NULL, 0,
+		  2, FET_CONFIG_PROTOCOL, 0)) {
+		printf("Configured for JTAG (0)\n");
+		return 0;
+	}
+
+	fprintf(stderr, "fet: JTAG configuration failed\n");
+	return -1;
+}
+
 device_t fet_open(transport_t transport, int proto_flags, int vcc_mv,
 		  const char *force_id)
 {
@@ -791,11 +839,20 @@ device_t fet_open(transport_t transport, int proto_flags, int vcc_mv,
 	dev->base.poll = fet_poll;
 
 	dev->transport = transport;
-	dev->is_rf2500 = proto_flags & FET_PROTO_RF2500;
+	dev->proto_flags = proto_flags;
 	dev->have_breakpoint = 0;
 
 	dev->fet_len = 0;
 
+	if (proto_flags & FET_PROTO_OLIMEX) {
+		printf("Resetting Olimex command processor...\n");
+		transport->send(dev->transport, (const uint8_t *)"\x7e", 1);
+		usleep(5000);
+		transport->send(dev->transport, (const uint8_t *)"\x7e", 1);
+		usleep(5000);
+	}
+
+	printf("Initializing FET...\n");
 	if (xfer(dev, C_INITIALIZE, NULL, 0, 0) < 0) {
 		fprintf(stderr, "fet: open failed\n");
 		goto fail;
@@ -809,16 +866,8 @@ device_t fet_open(transport_t transport, int proto_flags, int vcc_mv,
 		goto fail;
 	}
 
-	/* configure: Spy-Bi-Wire or JTAG */
-	if (xfer(dev, C_CONFIGURE, NULL, 0,
-		 2, FET_CONFIG_PROTOCOL,
-		 (proto_flags & FET_PROTO_SPYBIWIRE) ? 1 : 0) < 0) {
-		fprintf(stderr, "fet: configure failed\n");
+	if (do_configure(dev) < 0)
 		goto fail;
-	}
-
-	printf("Configured for %s\n",
-		(proto_flags & FET_PROTO_SPYBIWIRE) ? "Spy-Bi-Wire" : "JTAG");
 
 	/* set VCC */
 	if (xfer(dev, C_VCC, NULL, 0, 1, vcc_mv) < 0) {

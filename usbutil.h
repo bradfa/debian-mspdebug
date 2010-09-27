@@ -16,18 +16,18 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef FET_H_
-#define FET_H_
+#ifndef USBUTIL_H_
+#define USBUTIL_H_
 
-#include "device.h"
-#include "transport.h"
+#include <usb.h>
 
-/* MSP430 FET protocol implementation. */
-#define FET_PROTO_SPYBIWIRE	0x01
-#define FET_PROTO_RF2500	0x02
-#define FET_PROTO_OLIMEX        0x04
+/* List all available USB devices. */
+void usbutil_list(void);
 
-device_t fet_open(transport_t transport, int proto_flags, int vcc_mv,
-		  const char *force_id);
+/* Search for the first device matching the given Vendor:Product */
+struct usb_device *usbutil_find_by_id(int vendor, int product);
+
+/* Search for a device using a bus:dev location string */
+struct usb_device *usbutil_find_by_loc(const char *loc);
 
 #endif

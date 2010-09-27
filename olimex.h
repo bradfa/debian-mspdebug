@@ -1,5 +1,6 @@
 /* MSPDebug - debugging tool for MSP430 MCUs
  * Copyright (C) 2009, 2010 Daniel Beer
+ * Copyright (C) 2010 Peter Jansen
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,18 +17,17 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef FET_H_
-#define FET_H_
+#ifndef OLIMEX_H_
+#define OLIMEX_H_
 
-#include "device.h"
 #include "transport.h"
 
-/* MSP430 FET protocol implementation. */
-#define FET_PROTO_SPYBIWIRE	0x01
-#define FET_PROTO_RF2500	0x02
-#define FET_PROTO_OLIMEX        0x04
-
-device_t fet_open(transport_t transport, int proto_flags, int vcc_mv,
-		  const char *force_id);
+/* Search the USB bus for the first Olimex MSP-JTAG-TINY, and
+ * initialize it. If successful, 0 is returned and the fet_* functions
+ * are ready for use.  If an error occurs, -1 is returned.
+ *
+ * A particular USB device may be specified in bus:dev form.
+ */
+transport_t olimex_open(const char *usb_device);
 
 #endif
