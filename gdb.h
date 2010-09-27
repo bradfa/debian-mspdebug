@@ -19,11 +19,9 @@
 #ifndef GDB_H_
 #define GDB_H_
 
-/* Start a GDB remote stub, listening on the given TCP/IP port. It will
- * wait for GDB to connect, and then return once GDB has disconnected.
- *
- * Returns 0 for success, or -1 in the case of an error.
- */
-int gdb_server(const struct device *dev, int port);
+#include "cproc.h"
+
+/* Register the "gdb" command */
+int gdb_register(cproc_t cp);
 
 #endif

@@ -16,23 +16,25 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef TRANSPORT_H_
-#define TRANSPORT_H_
+#ifndef SIM_H_
+#define SIM_H_
 
-#include <sys/types.h>
+#include "device.h"
 
-/* This structure is used to provide an interface to a lower-level
- * transport. The transport mechanism is viewed as a stream by the FET
- * controller, which handles packet encapsulation, checksums and other
- * high-level functions.
+/* These function pointers should be supplied in order to allow
+ * the simulator to perform IO operations. If they're left blank, IO
+ * addresses just map to RAM.
  */
-struct transport;
-typedef struct transport *transport_t;
+typedef int (*sim_fetch_func_t)(void *user_data,
+				u_int16_t pc, u_int16_t addr,
+				int is_byte, u_int16_t *data);
 
-struct transport {
-	void (*destroy)(transport_t tr);
-	int (*send)(transport_t tr, const u_int8_t *data, int len);
-	int (*recv)(transport_t tr, u_int8_t *data, int max_len);
-};
+typedef void (*sim_store_func_t)(void *user_data,
+				 u_int16_t pc, u_int16_t addr,
+				 int is_byte, u_int16_t data);
+
+/* Dummy/simulation implementation. */
+device_t sim_open(sim_fetch_func_t fetch, sim_store_func_t store,
+		  void *user_data);
 
 #endif

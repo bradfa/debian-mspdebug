@@ -17,11 +17,12 @@
  */
 
 #include <assert.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <ctype.h>
 
 #include "dis.h"
-#include "stab.h"
 #include "util.h"
 
 /**********************************************************************/
@@ -33,8 +34,8 @@
  * Returns the number of bytes consumed in decoding, or -1 if the a
  * valid single-operand instruction could not be found.
  */
-static int decode_single(u_int8_t *code, u_int16_t offset, u_int16_t size,
-			 struct msp430_instruction *insn)
+static int decode_single(const u_int8_t *code, u_int16_t offset,
+			 u_int16_t size, struct msp430_instruction *insn)
 {
 	u_int16_t op = (code[1] << 8) | code[0];
 	int need_arg = 0;
@@ -85,8 +86,8 @@ static int decode_single(u_int8_t *code, u_int16_t offset, u_int16_t size,
  * Returns the number of bytes consumed or -1 if a valid instruction
  * could not be found.
  */
-static int decode_double(u_int8_t *code, u_int16_t offset, u_int16_t size,
-			 struct msp430_instruction *insn)
+static int decode_double(const u_int8_t *code, u_int16_t offset,
+			 u_int16_t size, struct msp430_instruction *insn)
 {
 	u_int16_t op = (code[1] << 8) | code[0];
 	int need_src = 0;
@@ -174,7 +175,7 @@ static int decode_double(u_int8_t *code, u_int16_t offset, u_int16_t size,
  * All jump instructions are one word in length, so this function
  * always returns 2 (to indicate the consumption of 2 bytes).
  */
-static int decode_jump(u_int8_t *code, u_int16_t offset, u_int16_t len,
+static int decode_jump(const u_int8_t *code, u_int16_t offset, u_int16_t len,
 		       struct msp430_instruction *insn)
 {
 	u_int16_t op = (code[1] << 8) | code[0];
@@ -191,32 +192,44 @@ static int decode_jump(u_int8_t *code, u_int16_t offset, u_int16_t len,
 	return 2;
 }
 
+static void remap_cgen(msp430_amode_t *mode,
+		       u_int16_t *addr,
+		       msp430_reg_t *reg)
+{
+	if (*reg == MSP430_REG_SR) {
+		if (*mode == MSP430_AMODE_INDIRECT) {
+			*mode = MSP430_AMODE_IMMEDIATE;
+			*addr = 4;
+		} else if (*mode == MSP430_AMODE_INDIRECT_INC) {
+			*mode = MSP430_AMODE_IMMEDIATE;
+			*addr = 8;
+		}
+	} else if (*reg == MSP430_REG_R3) {
+		if (*mode == MSP430_AMODE_REGISTER)
+			*addr = 0;
+		else if (*mode == MSP430_AMODE_INDEXED)
+			*addr = 1;
+		else if (*mode == MSP430_AMODE_INDIRECT)
+			*addr = 2;
+		else if (*mode == MSP430_AMODE_INDIRECT_INC)
+			*addr = 0xffff;
+
+		*mode = MSP430_AMODE_IMMEDIATE;
+	}
+}
+
 /* Take a decoded instruction and replace certain addressing modes of
  * the constant generator registers with their corresponding immediate
  * values.
  */
 static void find_cgens(struct msp430_instruction *insn)
 {
-	if (insn->src_reg == MSP430_REG_SR) {
-		if (insn->src_mode == MSP430_AMODE_INDIRECT) {
-			insn->src_mode = MSP430_AMODE_IMMEDIATE;
-			insn->src_addr = 4;
-		} else if (insn->src_mode == MSP430_AMODE_INDIRECT_INC) {
-			insn->src_mode = MSP430_AMODE_IMMEDIATE;
-			insn->src_addr = 8;
-		}
-	} else if (insn->src_reg == MSP430_REG_R3) {
-		if (insn->src_mode == MSP430_AMODE_REGISTER)
-			insn->src_addr = 0;
-		else if (insn->src_mode == MSP430_AMODE_INDEXED)
-			insn->src_addr = 1;
-		else if (insn->src_mode == MSP430_AMODE_INDIRECT)
-			insn->src_addr = 2;
-		else if (insn->src_mode == MSP430_AMODE_INDIRECT_INC)
-			insn->src_addr = 0xffff;
-
-		insn->src_mode = MSP430_AMODE_IMMEDIATE;
-	}
+	if (insn->itype == MSP430_ITYPE_DOUBLE)
+		remap_cgen(&insn->src_mode, &insn->src_addr,
+			   &insn->src_reg);
+	else if (insn->itype == MSP430_ITYPE_SINGLE)
+		remap_cgen(&insn->dst_mode, &insn->dst_addr,
+			   &insn->dst_reg);
 }
 
 /* Recognise special cases of real instructions and translate them to
@@ -383,7 +396,7 @@ static void find_emulated_ops(struct msp430_instruction *insn)
  * successful, the decoded instruction is written into the structure
  * pointed to by insn.
  */
-int dis_decode(u_int8_t *code, u_int16_t offset, u_int16_t len,
+int dis_decode(const u_int8_t *code, u_int16_t offset, u_int16_t len,
 	       struct msp430_instruction *insn)
 {
 	u_int16_t op;
@@ -426,87 +439,102 @@ int dis_decode(u_int8_t *code, u_int16_t offset, u_int16_t len,
 	find_cgens(insn);
 	find_emulated_ops(insn);
 
+	if (insn->is_byte_op) {
+		if (insn->src_mode == MSP430_AMODE_IMMEDIATE)
+			insn->src_addr &= 0xff;
+		if (insn->dst_mode == MSP430_AMODE_IMMEDIATE)
+			insn->dst_addr &= 0xff;
+	}
+
 	insn->len = ret;
 	return ret;
 }
 
-/* Return the mnemonic for an operation, if possible.
- *
- * If the argument is not a valid operation, this function returns the
- * string "???".
- */
-static const char *msp_op_name(msp430_op_t op)
+static const struct {
+	msp430_op_t     op;
+	const char      *mnemonic;
+} opcode_names[] = {
+	/* Single operand */
+	{MSP430_OP_RRC,         "RRC"},
+	{MSP430_OP_SWPB,        "SWPB"},
+	{MSP430_OP_RRA,         "RRA"},
+	{MSP430_OP_SXT,         "SXT"},
+	{MSP430_OP_PUSH,        "PUSH"},
+	{MSP430_OP_CALL,        "CALL"},
+	{MSP430_OP_RETI,        "RETI"},
+
+	/* Jump */
+	{MSP430_OP_JNZ,         "JNZ"},
+	{MSP430_OP_JZ,          "JZ"},
+	{MSP430_OP_JNC,         "JNC"},
+	{MSP430_OP_JC,          "JC"},
+	{MSP430_OP_JN,          "JN"},
+	{MSP430_OP_JL,          "JL"},
+	{MSP430_OP_JGE,         "JGE"},
+	{MSP430_OP_JMP,         "JMP"},
+
+	/* Double operand */
+	{MSP430_OP_MOV,         "MOV"},
+	{MSP430_OP_ADD,         "ADD"},
+	{MSP430_OP_ADDC,        "ADDC"},
+	{MSP430_OP_SUBC,        "SUBC"},
+	{MSP430_OP_SUB,         "SUB"},
+	{MSP430_OP_CMP,         "CMP"},
+	{MSP430_OP_DADD,        "DADD"},
+	{MSP430_OP_BIT,         "BIT"},
+	{MSP430_OP_BIC,         "BIC"},
+	{MSP430_OP_BIS,         "BIS"},
+	{MSP430_OP_XOR,         "XOR"},
+	{MSP430_OP_AND,         "AND"},
+
+	/* Emulated instructions */
+	{MSP430_OP_ADC,         "ADC"},
+	{MSP430_OP_BR,          "BR"},
+	{MSP430_OP_CLR,         "CLR"},
+	{MSP430_OP_CLRC,        "CLRC"},
+	{MSP430_OP_CLRN,        "CLRN"},
+	{MSP430_OP_CLRZ,        "CLRZ"},
+	{MSP430_OP_DADC,        "DADC"},
+	{MSP430_OP_DEC,         "DEC"},
+	{MSP430_OP_DECD,        "DECD"},
+	{MSP430_OP_DINT,        "DINT"},
+	{MSP430_OP_EINT,        "EINT"},
+	{MSP430_OP_INC,         "INC"},
+	{MSP430_OP_INCD,        "INCD"},
+	{MSP430_OP_INV,         "INV"},
+	{MSP430_OP_NOP,         "NOP"},
+	{MSP430_OP_POP,         "POP"},
+	{MSP430_OP_RET,         "RET"},
+	{MSP430_OP_RLA,         "RLA"},
+	{MSP430_OP_RLC,         "RLC"},
+	{MSP430_OP_SBC,         "SBC"},
+	{MSP430_OP_SETC,        "SETC"},
+	{MSP430_OP_SETN,        "SETN"},
+	{MSP430_OP_SETZ,        "SETZ"},
+	{MSP430_OP_TST,         "TST"}
+};
+
+/* Return the mnemonic for an operation, if possible. */
+const char *dis_opcode_name(msp430_op_t op)
 {
-	static const struct {
-		msp430_op_t     op;
-		const char      *mnemonic;
-	} ops[] = {
-		/* Single operand */
-		{MSP430_OP_RRC,         "RRC"},
-		{MSP430_OP_SWPB,        "SWPB"},
-		{MSP430_OP_RRA,         "RRA"},
-		{MSP430_OP_SXT,         "SXT"},
-		{MSP430_OP_PUSH,        "PUSH"},
-		{MSP430_OP_CALL,        "CALL"},
-		{MSP430_OP_RETI,        "RETI"},
-
-		/* Jump */
-		{MSP430_OP_JNZ,         "JNZ"},
-		{MSP430_OP_JZ,          "JZ"},
-		{MSP430_OP_JNC,         "JNC"},
-		{MSP430_OP_JC,          "JC"},
-		{MSP430_OP_JN,          "JN"},
-		{MSP430_OP_JL,          "JL"},
-		{MSP430_OP_JGE,         "JGE"},
-		{MSP430_OP_JMP,         "JMP"},
-
-		/* Double operand */
-		{MSP430_OP_MOV,         "MOV"},
-		{MSP430_OP_ADD,         "ADD"},
-		{MSP430_OP_ADDC,        "ADDC"},
-		{MSP430_OP_SUBC,        "SUBC"},
-		{MSP430_OP_SUB,         "SUB"},
-		{MSP430_OP_CMP,         "CMP"},
-		{MSP430_OP_DADD,        "DADD"},
-		{MSP430_OP_BIT,         "BIT"},
-		{MSP430_OP_BIC,         "BIC"},
-		{MSP430_OP_BIS,         "BIS"},
-		{MSP430_OP_XOR,         "XOR"},
-		{MSP430_OP_AND,         "AND"},
-
-		/* Emulated instructions */
-		{MSP430_OP_ADC,         "ADC"},
-		{MSP430_OP_BR,          "BR"},
-		{MSP430_OP_CLR,         "CLR"},
-		{MSP430_OP_CLRC,        "CLRC"},
-		{MSP430_OP_CLRN,        "CLRN"},
-		{MSP430_OP_CLRZ,        "CLRZ"},
-		{MSP430_OP_DADC,        "DADC"},
-		{MSP430_OP_DEC,         "DEC"},
-		{MSP430_OP_DECD,        "DECD"},
-		{MSP430_OP_DINT,        "DINT"},
-		{MSP430_OP_EINT,        "EINT"},
-		{MSP430_OP_INC,         "INC"},
-		{MSP430_OP_INCD,        "INCD"},
-		{MSP430_OP_INV,         "INV"},
-		{MSP430_OP_NOP,         "NOP"},
-		{MSP430_OP_POP,         "POP"},
-		{MSP430_OP_RET,         "RET"},
-		{MSP430_OP_RLA,         "RLA"},
-		{MSP430_OP_RLC,         "RLC"},
-		{MSP430_OP_SBC,         "SBC"},
-		{MSP430_OP_SETC,        "SETC"},
-		{MSP430_OP_SETN,        "SETN"},
-		{MSP430_OP_SETZ,        "SETZ"},
-		{MSP430_OP_TST,         "TST"}
-	};
 	int i;
 
-	for (i = 0; i < ARRAY_LEN(ops); i++)
-		if (op == ops[i].op)
-			return ops[i].mnemonic;
+	for (i = 0; i < ARRAY_LEN(opcode_names); i++)
+		if (op == opcode_names[i].op)
+			return opcode_names[i].mnemonic;
 
-	return "???";
+	return NULL;
+}
+
+msp430_op_t dis_opcode_from_name(const char *name)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_LEN(opcode_names); i++)
+		if (!strcasecmp(name, opcode_names[i].mnemonic))
+			return opcode_names[i].op;
+
+	return -1;
 }
 
 static const char *const msp430_reg_names[] = {
@@ -516,100 +544,34 @@ static const char *const msp430_reg_names[] = {
 	"R12", "R13", "R14", "R15"
 };
 
-static int format_addr(char *buf, int max_len, const char *prefix,
-		       u_int16_t addr)
+msp430_reg_t dis_reg_from_name(const char *name)
 {
-	const char *name;
+	const char *num = name;
 
-	if (stab_find(&addr, &name) < 0)
-		return snprintf(buf, max_len, "%s0x%04x", prefix, addr);
+	while (num && isdigit(*num))
+		num++;
 
-	if (addr)
-		return snprintf(buf, max_len, "%s%s+0x%x", prefix, name, addr);
+	if (*num) {
+		msp430_reg_t r = atoi(num);
 
-	return snprintf(buf, max_len, "%s%s", prefix, name);
+		if (r >= 0 && r <= 15)
+			return r;
+	}
+
+	if (!strcasecmp(name, "pc"))
+		return 0;
+	if (!strcasecmp(name, "sp"))
+		return 1;
+	if (!strcasecmp(name, "sr"))
+		return 2;
+
+	return -1;
 }
 
-/* Given an operands addressing mode, value and associated register,
- * print the canonical representation of it to stdout.
- *
- * Returns the number of characters printed.
- */
-static int format_operand(char *buf, int max_len,
-			  msp430_amode_t amode, u_int16_t addr,
-			  msp430_reg_t reg)
+const char *dis_reg_name(msp430_reg_t reg)
 {
-	assert (reg >= 0 && reg < ARRAY_LEN(msp430_reg_names));
+	if (reg >= 0 && reg <= 15)
+		return msp430_reg_names[reg];
 
-	switch (amode) {
-	case MSP430_AMODE_REGISTER:
-		return snprintf(buf, max_len, "%s", msp430_reg_names[reg]);
-
-	case MSP430_AMODE_INDEXED:
-		return snprintf(buf, max_len, "0x%x(%s)", (u_int16_t)addr,
-				msp430_reg_names[reg]);
-
-	case MSP430_AMODE_SYMBOLIC:
-		return format_addr(buf, max_len, "", addr);
-
-	case MSP430_AMODE_ABSOLUTE:
-		return format_addr(buf, max_len, "&", addr);
-
-	case MSP430_AMODE_INDIRECT:
-		return snprintf(buf, max_len, "@%s", msp430_reg_names[reg]);
-
-	case MSP430_AMODE_INDIRECT_INC:
-		return snprintf(buf, max_len, "@%s+", msp430_reg_names[reg]);
-
-	case MSP430_AMODE_IMMEDIATE:
-		return snprintf(buf, max_len, "#0x%x", (u_int16_t)addr);
-	}
-
-	return snprintf(buf, max_len, "???");
-}
-
-/* Write assembly language for the instruction to this buffer */
-int dis_format(char *buf, int max_len,
-	       const struct msp430_instruction *insn)
-{
-	int count = 0;
-
-	/* Opcode mnemonic */
-	count = snprintf(buf, max_len, "%s", msp_op_name(insn->op));
-	if (insn->is_byte_op)
-		count += snprintf(buf + count, max_len - count, ".B");
-	while (count < 8 && count + 1 < max_len)
-		buf[count++] = ' ';
-
-	/* Source operand */
-	if (insn->itype == MSP430_ITYPE_DOUBLE) {
-		count += format_operand(buf + count,
-					max_len - count,
-					insn->src_mode,
-					insn->src_addr,
-					insn->src_reg);
-
-		if (count + 1 < max_len)
-			buf[count++] = ',';
-		while (count < 20 && count + 1 < max_len)
-			buf[count++] = ' ';
-	}
-
-	/* Destination operand */
-	if (insn->itype != MSP430_ITYPE_NOARG) {
-		if ((insn->op == MSP430_OP_CALL ||
-		     insn->op == MSP430_OP_BR) &&
-		    insn->dst_mode == MSP430_AMODE_IMMEDIATE)
-			count += format_addr(buf + count, max_len - count,
-					     "#", insn->dst_addr);
-		else
-			count += format_operand(buf + count,
-						max_len - count,
-						insn->dst_mode,
-						insn->dst_addr,
-						insn->dst_reg);
-	}
-
-	buf[count] = 0;
-	return count;
+	return NULL;
 }

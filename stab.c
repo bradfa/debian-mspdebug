@@ -17,273 +17,476 @@
  */
 
 #include <stdio.h>
-#include <ctype.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+#include <sys/types.h>
+#include <regex.h>
+#include <errno.h>
+#include <assert.h>
+#include "btree.h"
 #include "stab.h"
+#include "util.h"
 
-static char *strtab;
-static int strtab_len;
-static int strtab_cap;
-
-struct symbol {
-	int		name;
-	u_int16_t	addr;
+struct sym_key {
+	char name[64];
 };
 
-struct symvec {
-	struct symbol	*syms;
-	int		len;
-	int		cap;
-};
+static const struct sym_key sym_key_zero;
 
-static struct symvec by_name;
-static struct symvec by_addr;
-static int need_sort;
-
-static void vec_clear(struct symvec *v)
+static int sym_key_compare(const void *left, const void *right)
 {
-	if (v->syms)
-		free(v->syms);
-
-	v->syms = NULL;
-	v->len = 0;
-	v->cap = 0;
+	return strcmp(((const struct sym_key *)left)->name,
+		      ((const struct sym_key *)right)->name);
 }
+
+static void sym_key_init(struct sym_key *key, const char *text)
+{
+	int len = strlen(text);
+
+	if (len >= sizeof(key->name))
+		len = sizeof(key->name) - 1;
+
+	memcpy(key->name, text, len);
+	key->name[len] = 0;
+}
+
+struct addr_key {
+	u_int16_t       addr;
+	char            name[64];
+};
+
+static const struct addr_key addr_key_zero;
+
+static int addr_key_compare(const void *left, const void *right)
+{
+	const struct addr_key *kl = (const struct addr_key *)left;
+	const struct addr_key *kr = (const struct addr_key *)right;
+
+	if (kl->addr < kr->addr)
+		return -1;
+	if (kl->addr > kr->addr)
+		return 1;
+
+	return strcmp(kl->name, kr->name);
+}
+
+static void addr_key_init(struct addr_key *key, u_int16_t addr,
+			  const char *text)
+{
+	int len = strlen(text);
+
+	if (len >= sizeof(key->name))
+		len = sizeof(key->name) - 1;
+
+	key->addr = addr;
+	memcpy(key->name, text, len);
+	key->name[len] = 0;
+}
+
+static const struct btree_def sym_table_def = {
+	.compare = sym_key_compare,
+	.zero = &sym_key_zero,
+	.branches = 32,
+	.key_size = sizeof(struct sym_key),
+	.data_size = sizeof(u_int16_t)
+};
+
+static const struct btree_def addr_table_def = {
+	.compare = addr_key_compare,
+	.zero = &addr_key_zero,
+	.branches = 32,
+	.key_size = sizeof(struct addr_key),
+	.data_size = 0
+};
+
+static btree_t sym_table;
+static btree_t addr_table;
 
 void stab_clear(void)
 {
-	if (strtab)
-		free(strtab);
-	strtab = NULL;
-	strtab_len = 0;
-	strtab_cap = 0;
-
-	need_sort = 0;
-	vec_clear(&by_name);
-	vec_clear(&by_addr);
+	btree_clear(sym_table);
+	btree_clear(addr_table);
 }
 
-int stab_add_string(const char *text, int len)
+int stab_set(const char *name, int value)
 {
-	int cap = strtab_cap;
+	struct sym_key skey;
+	struct addr_key akey;
+	u_int16_t addr = value;
+	u_int16_t old_addr;
 
-	if (!text || !len)
-		return strtab_len;
+	sym_key_init(&skey, name);
 
-	/* Figure out how big the table needs to be after we add this
-	 * string.
+	/* Look for an old address first, and delete the reverse mapping
+	 * if it's there.
 	 */
-	if (!cap)
-		cap = 1024;
-	while (strtab_len + len + 1 > cap)
-		cap *= 2;
-
-	/* Reallocate if necessary */
-	if (cap != strtab_cap) {
-		char *n = realloc(strtab, cap);
-
-		if (!n) {
-			perror("stab: can't allocate memory for string");
-			return -1;
-		}
-
-		strtab = n;
-		strtab_cap = cap;
+	if (!btree_get(sym_table, &skey, &old_addr)) {
+		addr_key_init(&akey, old_addr, skey.name);
+		btree_delete(addr_table, &akey);
 	}
 
-	/* Copy it in */
-	memcpy(strtab + strtab_len, text, len);
-	strtab_len += len;
-	strtab[strtab_len] = 0;
-
-	return strtab_len;
-}
-
-static int vec_push(struct symvec *v, int name, u_int16_t addr)
-{
-	int cap = v->cap;
-	struct symbol *s;
-
-	if (!cap)
-		cap = 64;
-	while (v->len + 1 > cap)
-		cap *= 2;
-
-	if (cap != v->cap) {
-		struct symbol *n = realloc(v->syms, cap * sizeof(v->syms[0]));
-
-		if (!n) {
-			perror("stab: can't allocate memory for symbol");
-			return -1;
-		}
-
-		v->syms = n;
-		v->cap = cap;
+	/* Put the new mapping into both tables */
+	addr_key_init(&akey, addr, name);
+	if (btree_put(addr_table, &akey, NULL) < 0 ||
+	    btree_put(sym_table, &skey, &addr) < 0) {
+		fprintf(stderr, "stab: can't set %s = 0x%04x\n", name, addr);
+		return -1;
 	}
-
-	s = &v->syms[v->len++];
-	s->name = name;
-	s->addr = addr;
 
 	return 0;
 }
 
-int stab_add_symbol(int name, u_int16_t addr)
+int stab_nearest(u_int16_t addr, char *ret_name, int max_len,
+		 u_int16_t *ret_offset)
 {
-	if (name < 0 || name > strtab_len) {
-		fprintf(stderr, "stab: symbol name out of bounds: %d\n",
-			name);
-		return -1;
-	}
-
-	need_sort = 1;
-	if (vec_push(&by_name, name, addr) < 0)
-		return -1;
-	if (vec_push(&by_addr, name, addr) < 0)
-		return -1;
-
-	return 0;
-}
-
-static int cmp_by_name(const void *a, const void *b)
-{
-	const struct symbol *sa = (const struct symbol *)a;
-	const struct symbol *sb = (const struct symbol *)b;
-
-	return strcmp(strtab + sa->name, strtab + sb->name);
-}
-
-static int cmp_by_addr(const void *a, const void *b)
-{
-	const struct symbol *sa = (const struct symbol *)a;
-	const struct symbol *sb = (const struct symbol *)b;
-
-	if (sa->addr < sb->addr)
-		return -1;
-	if (sa->addr > sb->addr)
-		return 1;
-	return 0;
-}
-
-static void sort_tables(void)
-{
-	if (!need_sort)
-		return;
-	need_sort = 0;
-
-	qsort(by_name.syms, by_name.len, sizeof(by_name.syms[0]),
-	      cmp_by_name);
-	qsort(by_addr.syms, by_addr.len, sizeof(by_addr.syms[0]),
-	      cmp_by_addr);
-}
-
-static char token_buf[64];
-static int token_len;
-static int token_mult;
-static int token_sum;
-
-static int token_add(void)
-{
-	int low = 0;
-	int high = by_name.len - 1;
+	struct addr_key akey;
 	int i;
 
-	if (!token_len)
-		return 0;
+	akey.addr = addr;
+	for (i = 0; i < sizeof(akey.name); i++)
+		akey.name[i] = 0xff;
+	akey.name[sizeof(akey.name) - 1] = 0xff;
 
-	token_buf[token_len] = 0;
-	token_len = 0;
-
-	/* Is it a decimal? */
-	i = 0;
-	while (token_buf[i] && isdigit(token_buf[i]))
-		i++;
-	if (!token_buf[i]) {
-		token_sum += token_mult * atoi(token_buf);
+	if (!btree_select(addr_table, &akey, BTREE_LE, &akey, NULL)) {
+		strncpy(ret_name, akey.name, max_len);
+		ret_name[max_len - 1] = 0;
+		*ret_offset = addr - akey.addr;
 		return 0;
 	}
 
-	/* Is it hex? */
-	if (token_buf[0] == '0' && tolower(token_buf[1]) == 'x') {
-		token_sum += token_mult * strtol(token_buf + 2, NULL, 16);
-		return 0;
-	}
-
-	/* Look up the name in the symbol table */
-	while (low <= high) {
-		int mid = (low + high) / 2;
-		struct symbol *sym = &by_name.syms[mid];
-		int cmp = strcmp(strtab + sym->name, token_buf);
-
-		if (!cmp) {
-			token_sum += token_mult * (int)sym->addr;
-			return 0;
-		}
-
-		if (cmp < 0)
-			low = mid + 1;
-		else
-			high = mid - 1;
-	}
-
-	fprintf(stderr, "stab: unknown token: %s\n", token_buf);
 	return -1;
 }
 
-int stab_parse(const char *text, int *addr)
+int stab_get(const char *name, int *value)
 {
-	token_len = 0;
-	token_mult = 1;
-	token_sum = 0;
+	struct sym_key skey;
+	u_int16_t addr;
 
-	sort_tables();
-
-	while (*text) {
-		if (isalnum(*text) || *text == '_' || *text == '$') {
-			if (token_len + 1 < sizeof(token_buf))
-				token_buf[token_len++] = *text;
-		} else {
-			if (token_add() < 0)
-				return -1;
-			if (*text == '+')
-				token_mult = 1;
-			if (*text == '-')
-				token_mult = -1;
-		}
-
-		text++;
-	}
-
-	if (token_add() < 0)
+	sym_key_init(&skey, name);
+	if (btree_get(sym_table, &skey, &addr))
 		return -1;
 
-	*addr = token_sum;
+	*value = addr;
 	return 0;
 }
 
-int stab_find(u_int16_t *addr, const char **name)
+int stab_del(const char *name)
 {
-	int low = 0;
-	int high = by_addr.len - 1;
+	struct sym_key skey;
+	u_int16_t value;
+	struct addr_key akey;
 
-	sort_tables();
+	sym_key_init(&skey, name);
+	if (btree_get(sym_table, &skey, &value))
+		return -1;
 
-	while (low <= high) {
-		int mid = (low + high) / 2;
-		struct symbol *sym = &by_addr.syms[mid];
+	addr_key_init(&akey, value, name);
+	btree_delete(sym_table, &skey);
+	btree_delete(addr_table, &akey);
 
-		if (sym->addr > *addr) {
-			high = mid - 1;
-		} else if (mid + 1 > by_addr.len ||
-			   by_addr.syms[mid + 1].addr > *addr) {
-			*addr -= sym->addr;
-			*name = strtab + sym->name;
-			return 0;
-		} else {
-			low = mid + 1;
-		}
+	return 0;
+}
+
+int stab_enum(stab_callback_t cb)
+{
+	int ret;
+	struct addr_key akey;
+
+	ret = btree_select(addr_table, NULL, BTREE_FIRST,
+			   &akey, NULL);
+	while (!ret) {
+		if (cb(akey.name, akey.addr) < 0)
+			return -1;
+		ret = btree_select(addr_table, NULL, BTREE_NEXT,
+				   &akey, NULL);
 	}
 
+	return 0;
+}
+
+int stab_init(void)
+{
+	sym_table = btree_alloc(&sym_table_def);
+	if (!sym_table) {
+		fprintf(stderr, "stab: failed to allocate symbol table\n");
+		return -1;
+	}
+
+	addr_table = btree_alloc(&addr_table_def);
+	if (!addr_table) {
+		fprintf(stderr, "stab: failed to allocate address table\n");
+		btree_free(sym_table);
+		return -1;
+	}
+
+        return 0;
+}
+
+void stab_exit(void)
+{
+	btree_free(sym_table);
+	btree_free(addr_table);
+}
+
+/************************************************************************
+ * Address expression parsing.
+ */
+
+struct addr_exp_state {
+	int     last_operator;
+	int     data_stack[32];
+	int     data_stack_size;
+	int     op_stack[32];
+	int     op_stack_size;
+};
+
+static int addr_exp_data(struct addr_exp_state *s, const char *text)
+{
+	int value;
+
+	if (!s->last_operator || s->last_operator == ')') {
+		fprintf(stderr, "syntax error at token %s\n", text);
+		return -1;
+	}
+
+	/* Hex value */
+	if (*text == '0' && text[1] == 'x')
+		value = strtoul(text + 2, NULL, 16);
+	else if (isdigit(*text))
+		value = atoi(text);
+	else if (stab_get(text, &value) < 0) {
+		fprintf(stderr, "can't parse token: %s\n", text);
+		return -1;
+	}
+
+	if (s->data_stack_size + 1 > ARRAY_LEN(s->data_stack)) {
+		fprintf(stderr, "data stack overflow at token %s\n", text);
+		return -1;
+	}
+
+	s->data_stack[s->data_stack_size++] = value;
+	s->last_operator = 0;
+	return 0;
+}
+
+static int addr_exp_pop(struct addr_exp_state *s)
+{
+	char op = s->op_stack[--s->op_stack_size];
+	int data1 = s->data_stack[--s->data_stack_size];
+	int data2 = 0;
+
+	int result = 0;
+
+	if (op != 'N')
+		data2 = s->data_stack[--s->data_stack_size];
+
+	assert (s->op_stack_size >= 0);
+	assert (s->data_stack_size >= 0);
+
+	switch (op) {
+	case '+':
+		result = data2 + data1;
+		break;
+
+	case '-':
+		result = data2 - data1;
+		break;
+
+	case '*':
+		result = data2 * data1;
+		break;
+
+	case '/':
+		if (!data1)
+			goto divzero;
+		result = data2 / data1;
+		break;
+
+	case '%':
+		if (!data1)
+			goto divzero;
+		result = data2 % data1;
+		break;
+
+	case 'N':
+		result = -data1;
+		break;
+	}
+
+	s->data_stack[s->data_stack_size++] = result;
+	return 0;
+
+ divzero:
+	fprintf(stderr, "divide by zero\n");
+	return -1;
+}
+
+static int can_push(struct addr_exp_state *s, char op)
+{
+	char top;
+
+	if (!s->op_stack_size || op == '(')
+		return 1;
+
+	top = s->op_stack[s->op_stack_size - 1];
+
+	if (top == '(')
+		return 1;
+
+	switch (op) {
+	case 'N':
+		return 1;
+
+	case '*':
+	case '%':
+	case '/':
+		return top == '+' || top == '-';
+
+	default:
+		break;
+	}
+
+	return 0;
+}
+
+static int addr_exp_op(struct addr_exp_state *s, char op)
+{
+	if (op == '(') {
+		if (!s->last_operator || s->last_operator == ')')
+			goto syntax_error;
+	} else if (op == '-') {
+		if (s->last_operator && s->last_operator != ')')
+			op = 'N';
+	} else {
+		if (s->last_operator && s->last_operator != ')')
+			goto syntax_error;
+	}
+
+	if (op == ')') {
+		/* ) collapses the stack to the last matching ( */
+		while (s->op_stack_size &&
+		       s->op_stack[s->op_stack_size - 1] != '(')
+			if (addr_exp_pop(s) < 0)
+				return -1;
+
+		if (!s->op_stack_size) {
+			fprintf(stderr, "parenthesis mismatch: )\n");
+			return -1;
+		}
+
+		s->op_stack_size--;
+	} else {
+		while (!can_push(s, op))
+			if (addr_exp_pop(s) < 0)
+				return -1;
+
+		if (s->op_stack_size + 1 > ARRAY_LEN(s->op_stack)) {
+			fprintf(stderr, "operator stack overflow: %c\n", op);
+			return -1;
+		}
+
+		s->op_stack[s->op_stack_size++] = op;
+	}
+
+	s->last_operator = op;
+	return 0;
+
+ syntax_error:
+	fprintf(stderr, "syntax error at operator %c\n", op);
+	return -1;
+}
+
+static int addr_exp_finish(struct addr_exp_state *s, int *ret)
+{
+	if (s->last_operator && s->last_operator != ')') {
+		fprintf(stderr, "syntax error at end of expression\n");
+		return -1;
+	}
+
+	while (s->op_stack_size) {
+		if (s->op_stack[s->op_stack_size - 1] == '(') {
+			fprintf(stderr, "parenthesis mismatch: (\n");
+			return -1;
+		}
+
+		if (addr_exp_pop(s) < 0)
+			return -1;
+	}
+
+	if (s->data_stack_size != 1) {
+		fprintf(stderr, "no data: stack size is %d\n",
+			s->data_stack_size);
+		return -1;
+	}
+
+	if (ret)
+		*ret = s->data_stack[0];
+
+	return 0;
+}
+
+int stab_exp(const char *text, int *addr)
+{
+	const char *text_save = text;
+	int last_cc = 1;
+	char token_buf[64];
+	int token_len = 0;
+	struct addr_exp_state s = {0};
+
+	s.last_operator = '(';
+
+	for (;;) {
+		int cc;
+
+		/* Figure out what class this character is */
+		if (*text == '+' || *text == '-' ||
+		    *text == '*' || *text == '/' ||
+		    *text == '%' || *text == '(' ||
+		    *text == ')')
+			cc = 1;
+		else if (!*text || isspace(*text))
+			cc = 2;
+		else if (isalnum(*text) || *text == '.' || *text == '_' ||
+			 *text == '$' || *text == ':')
+			cc = 3;
+		else {
+			fprintf(stderr, "illegal character in expression: %c\n",
+				*text);
+			return -1;
+		}
+
+		/* Accumulate and process token text */
+		if (cc == 3) {
+			if (token_len + 1 < sizeof(token_buf))
+				token_buf[token_len++] = *text;
+		} else if (token_len) {
+			token_buf[token_len] = 0;
+			token_len = 0;
+
+			if (addr_exp_data(&s, token_buf) < 0)
+				goto fail;
+		}
+
+		/* Process operators */
+		if (cc == 1) {
+			if (addr_exp_op(&s, *text) < 0)
+				goto fail;
+		}
+
+		if (!*text)
+			break;
+
+		last_cc = cc;
+		text++;
+	}
+
+	if (addr_exp_finish(&s, addr) < 0)
+		goto fail;
+
+	return 0;
+
+ fail:
+	fprintf(stderr, "bad address expression: %s\n", text_save);
 	return -1;
 }

@@ -21,37 +21,44 @@
 
 #include <sys/types.h>
 
+/* Initialise/destroy the symbol table manager. If successful, init returns
+ * 0, or -1 on error.
+ */
+int stab_init(void);
+void stab_exit(void);
+
 /* Reset the symbol table (delete all symbols) */
 void stab_clear(void);
 
-/* Add a block of text to the string table. On success, returns the new
- * size of the string table. Returns -1 on error. You can fetch the table's
- * current size by calling stab_add_string(NULL, 0);
- */
-int stab_add_string(const char *text, int len);
+/* Set a symbol in the table. Returns 0 on success, or -1 on error. */
+int stab_set(const char *name, int value);
 
-/* Symbol types. Symbols are divided into a fixed number of classes for
- * query purposes.
- */
-#define STAB_TYPE_CODE		0x01
-#define STAB_TYPE_DATA		0x02
-#define STAB_TYPE_ALL		0x03
-
-/* Add a symbol to the table. The name is specified as an offset into
- * the string table.
+/* Take an address and find the nearest symbol and offset (always
+ * non-negative).
  *
- * Returns 0 on success, or -1 if an error occurs.
+ * Returns 0 if found, 1 otherwise.
  */
-int stab_add_symbol(int name, u_int16_t addr);
+int stab_nearest(u_int16_t addr, char *ret_name, int max_len,
+		 u_int16_t *ret_offset);
 
-/* Parse a symbol name and return an address. The text may be an address,
- * a symbol name or a combination (using + or -).
- *
- * Returns 0 if parsed successfully, -1 if an error occurs.
+/* Retrieve the value of a symbol. Returns 0 on success or -1 if the symbol
+ * doesn't exist.
  */
-int stab_parse(const char *text, int *addr);
+int stab_get(const char *name, int *value);
 
-/* Take an address and find the nearest symbol. */
-int stab_find(u_int16_t *addr, const char **name);
+/* Delete a symbol table entry. Returns 0 on success or -1 if the symbol
+ * doesn't exist.
+ */
+int stab_del(const char *name);
+
+/* Enumerate all symbols in the table */
+typedef int (*stab_callback_t)(const char *name, u_int16_t value);
+
+int stab_enum(stab_callback_t cb);
+
+/* Parse an address expression, storing the result in the integer
+ * pointed to. Returns 0 if parsed successfully, -1 if not.
+ */
+int stab_exp(const char *text, int *value);
 
 #endif

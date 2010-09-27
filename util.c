@@ -1,4 +1,4 @@
-/* MSPDebug - debugging tool for the eZ430
+/* MSPDebug - debugging tool for MSP430 MCUs
  * Copyright (C) 2009, 2010 Daniel Beer
  *
  * This program is free software; you can redistribute it and/or modify
@@ -17,103 +17,45 @@
  */
 
 #include <stdio.h>
+#include <ctype.h>
+#include <stdlib.h>
+#include <string.h>
+#include <errno.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
 #include <errno.h>
 #include <signal.h>
+#include <assert.h>
+
 #include "util.h"
 
-void hexdump(int addr, const u_int8_t *data, int len)
+static volatile int ctrlc_flag;
+
+static void sigint_handler(int signum)
 {
-	int offset = 0;
-
-	while (offset < len) {
-		int i, j;
-
-		/* Address label */
-		printf("    %04x:", offset + addr);
-
-		/* Hex portion */
-		for (i = 0; i < 16 && offset + i < len; i++)
-			printf(" %02x", data[offset + i]);
-		for (j = i; j < 16; j++)
-			printf("   ");
-
-		/* Printable characters */
-		printf(" |");
-		for (j = 0; j < i; j++) {
-			int c = data[offset + j];
-
-			printf("%c", (c >= 32 && c <= 126) ? c : '.');
-		}
-		for (; j < 16; j++)
-			printf(" ");
-		printf("|\n");
-
-		offset += i;
-	}
+	ctrlc_flag = 1;
 }
 
-/* This table of device IDs is sourced mainly from the MSP430 Memory
- * Programming User's Guide (SLAU265).
- *
- * The table should be kept sorted by device ID.
- */
-
-static struct {
-	u_int16_t	id;
-	const char	*id_text;
-} id_table[] = {
-	{0x1132, "F1122"},
-	{0x1132, "F1132"},
-	{0x1232, "F1222"},
-	{0x1232, "F1232"},
-	{0xF112, "F11x"},   /* obsolete */
-	{0xF112, "F11x1"},  /* obsolete */
-	{0xF112, "F11x1A"}, /* obsolete */
-	{0xF123, "F122"},
-	{0xF123, "F123x"},
-	{0xF143, "F14x"},
-	{0xF149, "F13x"},
-	{0xF149, "F14x1"},
-	{0xF149, "F149"},
-	{0xF169, "F16x"},
-	{0xF16C, "F161x"},
-	{0xF201, "F20x3"},
-	{0xF213, "F21x1"},
-	{0xF227, "F22xx"},
-	{0xF249, "F24x"},
-	{0xF26F, "F261x"},
-	{0xF413, "F41x"},
-	{0xF427, "FE42x"},
-	{0xF427, "FW42x"},
-	{0xF427, "F415"},
-	{0xF427, "F417"},
-	{0xF427, "F42x0"},
-	{0xF439, "FG43x"},
-	{0xF449, "F43x"},
-	{0xF449, "F44x"},
-	{0xF46F, "FG46xx"},
-	{0xF46F, "F471xx"}
-};
-
-void print_devid(u_int16_t id)
+void ctrlc_init(void)
 {
-	int i = 0;
+	const static struct sigaction siga = {
+		.sa_handler = sigint_handler,
+		.sa_flags = 0
+	};
 
-	while (i < ARRAY_LEN(id_table) && id_table[i].id != id)
-		i++;
+	sigaction(SIGINT, &siga, NULL);
+}
 
-	if (i < ARRAY_LEN(id_table)) {
-		printf("Device: MSP430%s", id_table[i++].id_text);
-		while (id_table[i].id == id)
-			printf("/MSP430%s", id_table[i++].id_text);
-		printf("\n");
-	} else {
-		printf("Unknown device ID: 0x%04x\n", id);
-	}
+void ctrlc_reset(void)
+{
+	ctrlc_flag = 0;
+}
+
+int ctrlc_check(void)
+{
+	return ctrlc_flag;
 }
 
 int read_with_timeout(int fd, u_int8_t *data, int max_len)
@@ -177,29 +119,147 @@ int open_serial(const char *device, int rate)
 	return fd;
 }
 
-static volatile int ctrlc_flag;
-
-static void sigint_handler(int signum)
+char *get_arg(char **text)
 {
-	ctrlc_flag = 1;
+	char *start;
+	char *rewrite;
+	char *end;
+	int qstate = 0;
+	int qval = 0;
+
+	if (!text)
+		return NULL;
+
+	start = *text;
+	while (*start && isspace(*start))
+		start++;
+
+	if (!*start)
+		return NULL;
+
+	/* We've found the start of the argument. Parse it. */
+	end = start;
+	rewrite = start;
+	while (*end) {
+		switch (qstate) {
+		case 0: /* Bare */
+			if (isspace(*end))
+				goto out;
+			else if (*end == '"')
+				qstate = 1;
+			else
+				*(rewrite++) = *end;
+			break;
+
+		case 1: /* In quotes */
+			if (*end == '"')
+				qstate = 0;
+			else if (*end == '\\')
+				qstate = 2;
+			else
+				*(rewrite++) = *end;
+			break;
+
+		case 2: /* Backslash */
+			if (*end == '\\')
+				*(rewrite++) = '\\';
+			else if (*end == 'n')
+				*(rewrite++) = '\n';
+			else if (*end == 'r')
+				*(rewrite++) = '\r';
+			else if (*end == 't')
+				*(rewrite++) = '\t';
+			else if (*end >= '0' && *end <= '3') {
+				qstate = 30;
+				qval = *end - '0';
+			} else if (*end == 'x') {
+				qstate = 40;
+				qval = 0;
+			} else
+				*(rewrite++) = *end;
+
+			if (qstate == 2)
+				qstate = 1;
+			break;
+
+		case 30: /* Octal */
+		case 31:
+			if (*end >= '0' && *end <= '7')
+				qval = (qval << 3) | (*end - '0');
+
+			if (qstate == 31) {
+				*(rewrite++) = qval;
+				qstate = 1;
+			} else {
+				qstate++;
+			}
+			break;
+
+		case 40: /* Hex */
+		case 41:
+			if (isdigit(*end))
+				qval = (qval << 4) | (*end - '0');
+			else if (isupper(*end))
+				qval = (qval << 4) | (*end - 'A' + 10);
+			else if (islower(*end))
+				qval = (qval << 4) | (*end - 'a' + 10);
+
+			if (qstate == 41) {
+				*(rewrite++) = qval;
+				qstate = 1;
+			} else {
+				qstate++;
+			}
+			break;
+		}
+
+		end++;
+	}
+ out:
+	/* Leave the text pointer at the end of the next argument */
+	while (*end && isspace(*end))
+		end++;
+
+	*rewrite = 0;
+	*text = end;
+	return start;
 }
 
-void ctrlc_init(void)
+void debug_hexdump(const char *label, const u_int8_t *data, int len)
 {
-	const static struct sigaction siga = {
-		.sa_handler = sigint_handler,
-		.sa_flags = 0
-	};
+	int offset = 0;
 
-	sigaction(SIGINT, &siga, NULL);
+	printf("%s [0x%x bytes]\n", label, len);
+	while (offset < len) {
+		int i;
+
+		printf("    ");
+		for (i = 0; i < 16 && offset + i < len; i++)
+			printf("%02x ", data[offset + i]);
+		printf("\n");
+
+		offset += i;
+	}
 }
 
-void ctrlc_reset(void)
+int textlen(const char *text)
 {
-	ctrlc_flag = 0;
-}
+	int count = 0;
 
-int ctrlc_check(void)
-{
-	return ctrlc_flag;
+	for (;;) {
+		if (*text == 27) {
+			while (*text && !isalpha(*text))
+				text++;
+			if (*text)
+				text++;
+		}
+
+		if (!*text)
+			break;
+
+		count++;
+		text++;
+	}
+
+	return count;
 }

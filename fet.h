@@ -16,23 +16,16 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef TRANSPORT_H_
-#define TRANSPORT_H_
+#ifndef FET_H_
+#define FET_H_
 
-#include <sys/types.h>
+#include "device.h"
+#include "transport.h"
 
-/* This structure is used to provide an interface to a lower-level
- * transport. The transport mechanism is viewed as a stream by the FET
- * controller, which handles packet encapsulation, checksums and other
- * high-level functions.
- */
-struct transport;
-typedef struct transport *transport_t;
+/* MSP430 FET protocol implementation. */
+#define FET_PROTO_SPYBIWIRE	0x01
+#define FET_PROTO_RF2500	0x02
 
-struct transport {
-	void (*destroy)(transport_t tr);
-	int (*send)(transport_t tr, const u_int8_t *data, int len);
-	int (*recv)(transport_t tr, u_int8_t *data, int max_len);
-};
+device_t fet_open(transport_t transport, int proto_flags, int vcc_mv);
 
 #endif

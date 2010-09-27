@@ -202,11 +202,14 @@ struct msp430_instruction {
  * successful, the decoded instruction is written into the structure
  * pointed to by insn.
  */
-int dis_decode(u_int8_t *code, u_int16_t offset, u_int16_t len,
+int dis_decode(const u_int8_t *code,
+	       u_int16_t offset, u_int16_t len,
 	       struct msp430_instruction *insn);
 
-/* Write assembly language for the instruction to this buffer */
-int dis_format(char *buf, int max_len,
-	       const struct msp430_instruction *insn);
+/* Look up names for registers and opcodes */
+msp430_op_t dis_opcode_from_name(const char *name);
+const char *dis_opcode_name(msp430_op_t op);
+msp430_reg_t dis_reg_from_name(const char *name);
+const char *dis_reg_name(msp430_reg_t reg);
 
 #endif

@@ -16,23 +16,12 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef TRANSPORT_H_
-#define TRANSPORT_H_
+#ifndef RTOOLS_H_
+#define RTOOLS_H_
 
-#include <sys/types.h>
+#include "cproc.h"
 
-/* This structure is used to provide an interface to a lower-level
- * transport. The transport mechanism is viewed as a stream by the FET
- * controller, which handles packet encapsulation, checksums and other
- * high-level functions.
- */
-struct transport;
-typedef struct transport *transport_t;
-
-struct transport {
-	void (*destroy)(transport_t tr);
-	int (*send)(transport_t tr, const u_int8_t *data, int len);
-	int (*recv)(transport_t tr, u_int8_t *data, int max_len);
-};
+/* Register reverse-engineering tool commands. */
+int rtools_register(cproc_t cp);
 
 #endif

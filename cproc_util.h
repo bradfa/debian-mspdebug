@@ -16,23 +16,21 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef TRANSPORT_H_
-#define TRANSPORT_H_
+#ifndef CPROC_UTIL_H_
+#define CPROC_UTIL_H_
 
 #include <sys/types.h>
+#include "cproc.h"
 
-/* This structure is used to provide an interface to a lower-level
- * transport. The transport mechanism is viewed as a stream by the FET
- * controller, which handles packet encapsulation, checksums and other
- * high-level functions.
- */
-struct transport;
-typedef struct transport *transport_t;
+/* Print colorized disassembly on command processor standard output */
+void cproc_disassemble(cproc_t cp, u_int16_t addr,
+		       const u_int8_t *buf, int len);
 
-struct transport {
-	void (*destroy)(transport_t tr);
-	int (*send)(transport_t tr, const u_int8_t *data, int len);
-	int (*recv)(transport_t tr, u_int8_t *data, int max_len);
-};
+/* Print colorized hexdump on standard output */
+void cproc_hexdump(cproc_t cp, u_int16_t addr,
+		   const u_int8_t *buf, int len);
+
+/* Colorized register dump */
+void cproc_regs(cproc_t cp, const u_int16_t *regs);
 
 #endif
