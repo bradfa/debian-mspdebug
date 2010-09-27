@@ -50,11 +50,12 @@ int fet_close(void);
  * of three methods, and you can choose whether or not to leave the CPU
  * halted after reset.
  */
-#define FET_RESET_PUC   0x01
-#define FET_RESET_RST   0x02
-#define FET_RESET_VCC   0x04
-#define FET_RESET_ALL   0x07
-#define FET_RESET_HALT	0x10
+#define FET_RESET_PUC		0x01
+#define FET_RESET_RST		0x02
+#define FET_RESET_VCC		0x04
+#define FET_RESET_ALL		0x07
+#define FET_RESET_HALT		0x10
+#define FET_RESET_RELEASE	0x20
 
 int fet_reset(int flags);
 
@@ -68,12 +69,11 @@ int fet_get_context(u_int16_t *regs);
 int fet_set_context(u_int16_t *regs);
 
 /* Erase the CPU's internal flash. */
-#define FET_ERASE_ALL           0x01
-#define FET_ERASE_MAIN          0x02
-#define FET_ERASE_ADDR          0x03
-#define FET_ERASE_INFO          0x04
+#define FET_ERASE_SEGMENT	0
+#define FET_ERASE_MAIN		1
+#define FET_ERASE_ALL		2
 
-int fet_erase(int type, u_int16_t addr);
+int fet_erase(int type, u_int16_t addr, int len);
 
 /* Read and write memory. fet_write_mem can be used to reflash the
  * device, but only after an erase.
@@ -93,15 +93,17 @@ int fet_poll(void);
 
 /* CPU run/step/stop control. While the CPU is running, memory and
  * registers are inaccessible (only fet_poll() or fet_stop()) will
- * work. fet_step() is used to single-step the CPU.
+ * work.
  */
-int fet_step(void);
-int fet_run(void);
+#define FET_RUN_FREE		1
+#define FET_RUN_STEP		2
+#define FET_RUN_BREAKPOINT	3
+#define FET_RUN_RELEASE		0x10
+
+int fet_run(int type);
 int fet_stop(void);
 
-/* Set or clear the breakpoint address. Only one breakpoint can be set
- * at a time.
- */
-int fet_break(int enable, u_int16_t addr);
+/* Set a breakpoint address */
+int fet_break(int which, u_int16_t addr);
 
 #endif

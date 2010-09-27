@@ -1,5 +1,5 @@
 /* MSPDebug - debugging tool for the eZ430
- * Copyright (C) 2009 Daniel Beer
+ * Copyright (C) 2009, 2010 Daniel Beer
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -259,12 +259,12 @@ static int cmd_run(char **arg)
 		unsigned int addr = 0;
 
 		sscanf(bp_text, "%x", &addr);
-		fet_break(1, addr);
+		fet_break(0, addr);
 	} else {
 		fet_break(0, 0);
 	}
 
-	if (fet_run() < 0)
+	if (fet_run(bp_text ? FET_RUN_BREAKPOINT : FET_RUN_FREE) < 0)
 		return -1;
 
 	printf("Running. Press Ctrl+C to interrupt...");
@@ -319,7 +319,7 @@ static int cmd_set(char **arg)
 
 static int cmd_step(char **arg)
 {
-	if (fet_step() < 0)
+	if (fet_run(FET_RUN_STEP) < 0)
 		return -1;
 	if (fet_poll() < 0)
 		return -1;
@@ -445,7 +445,7 @@ static int cmd_prog(char **arg)
 	}
 
 	printf("Erasing...\n");
-	if (fet_erase(FET_ERASE_ALL, 0) < 0) {
+	if (fet_erase(FET_ERASE_ALL, 0x1000, 0x100) < 0) {
 		fclose(in);
 		return -1;
 	}
@@ -567,6 +567,7 @@ static void reader_loop(void)
 		.sa_flags = 0
 	};
 
+	printf("\n");
 	cmd_help(NULL);
 	sigaction(SIGINT, &siga, NULL);
 
@@ -596,11 +597,14 @@ static void reader_loop(void)
 
 static void usage(const char *progname)
 {
-	fprintf(stderr, "Usage: %s [-u device] [command ...]\n"
+	fprintf(stderr, "Usage: %s [-u device] [-j] [command ...]\n"
 "\n"
-"By default, the first RF2500 device on the USB bus is opened. If -u is\n"
-"given, then a UIF device attached to the specified serial port is\n"
-"opened.\n"
+"    -u device\n"
+"        Open the given tty device (MSP430 UIF compatible devices).\n"
+"    -j\n"
+"        Use JTAG, rather than spy-bi-wire (UIF devices only).\n"
+"\n"
+"By default, the first RF2500 device on the USB bus is opened.\n"
 "\n"
 "If commands are given, they will be executed. Otherwise, an interactive\n"
 "command reader is started.\n",
@@ -612,17 +616,22 @@ int main(int argc, char **argv)
 	const char *uif_device = NULL;
 	int opt;
 	int result;
+	int want_jtag = 0;
 
 	puts(
-"MSPDebug version 0.2 - debugging tool for the eZ430\n"
-"Copyright (C) 2009 Daniel Beer <dlbeer@gmail.com>\n"
+"MSPDebug version 0.3 - debugging tool for the eZ430\n"
+"Copyright (C) 2009, 2010 Daniel Beer <dlbeer@gmail.com>\n"
 "This is free software; see the source for copying conditions.  There is NO\n"
 "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n");
 
-	while ((opt = getopt(argc, argv, "u:")) >= 0)
+	while ((opt = getopt(argc, argv, "u:j")) >= 0)
 		switch (opt) {
 		case 'u':
 			uif_device = optarg;
+			break;
+
+		case 'j':
+			want_jtag = 1;
 			break;
 
 		default:
@@ -632,7 +641,7 @@ int main(int argc, char **argv)
 
 	/* Open the appropriate device */
 	if (uif_device)
-		result = uif_open(uif_device);
+		result = uif_open(uif_device, want_jtag);
 	else
 		result = rf2500_open();
 
@@ -646,7 +655,7 @@ int main(int argc, char **argv)
 		reader_loop();
 	}
 
-	fet_run();
+	fet_run(FET_RUN_FREE | FET_RUN_RELEASE);
 	fet_close();
 
 	return 0;
