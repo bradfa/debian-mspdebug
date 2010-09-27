@@ -1,5 +1,5 @@
 /* MSPDebug - debugging tool for the eZ430
- * Copyright (C) 2009 Daniel Beer
+ * Copyright (C) 2009, 2010 Daniel Beer
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,6 +21,8 @@
 #include <stdio.h>
 
 #include "dis.h"
+#include "stab.h"
+#include "util.h"
 
 /**********************************************************************/
 /* Disassembler
@@ -428,8 +430,6 @@ int dis_decode(u_int8_t *code, u_int16_t offset, u_int16_t len,
 	return ret;
 }
 
-#define ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
-
 /* Return the mnemonic for an operation, if possible.
  *
  * If the argument is not a valid operation, this function returns the
@@ -516,6 +516,20 @@ static const char *const msp430_reg_names[] = {
 	"R12", "R13", "R14", "R15"
 };
 
+static int format_addr(char *buf, int max_len, const char *prefix,
+		       u_int16_t addr)
+{
+	const char *name;
+
+	if (stab_find(&addr, &name) < 0)
+		return snprintf(buf, max_len, "%s0x%04x", prefix, addr);
+
+	if (addr)
+		return snprintf(buf, max_len, "%s%s+0x%x", prefix, name, addr);
+
+	return snprintf(buf, max_len, "%s%s", prefix, name);
+}
+
 /* Given an operands addressing mode, value and associated register,
  * print the canonical representation of it to stdout.
  *
@@ -532,23 +546,23 @@ static int format_operand(char *buf, int max_len,
 		return snprintf(buf, max_len, "%s", msp430_reg_names[reg]);
 
 	case MSP430_AMODE_INDEXED:
-		return snprintf(buf, max_len, "%d(%s)", (int16_t)addr,
+		return snprintf(buf, max_len, "0x%x(%s)", (u_int16_t)addr,
 				msp430_reg_names[reg]);
 
 	case MSP430_AMODE_SYMBOLIC:
-		return snprintf(buf, max_len, "0x%04x", addr);
+		return format_addr(buf, max_len, "", addr);
 
 	case MSP430_AMODE_ABSOLUTE:
-		return snprintf(buf, max_len, "&0x%04x", addr);
+		return format_addr(buf, max_len, "&", addr);
 
 	case MSP430_AMODE_INDIRECT:
-		return snprintf(buf, max_len, "@%s", msp430_reg_names[reg]);
+		return format_addr(buf, max_len, "@", addr);
 
 	case MSP430_AMODE_INDIRECT_INC:
 		return snprintf(buf, max_len, "@%s+", msp430_reg_names[reg]);
 
 	case MSP430_AMODE_IMMEDIATE:
-		return snprintf(buf, max_len, "#%d", (int16_t)addr);
+		return snprintf(buf, max_len, "#0x%x", (u_int16_t)addr);
 	}
 
 	return snprintf(buf, max_len, "???");
@@ -586,8 +600,8 @@ int dis_format(char *buf, int max_len,
 		if ((insn->op == MSP430_OP_CALL ||
 		     insn->op == MSP430_OP_BR) &&
 		    insn->dst_mode == MSP430_AMODE_IMMEDIATE)
-			count += snprintf(buf + count, max_len - count,
-					  "#0x%04x", insn->dst_addr);
+			count += format_addr(buf + count, max_len - count,
+					     "#", insn->dst_addr);
 		else
 			count += format_operand(buf + count,
 						max_len - count,

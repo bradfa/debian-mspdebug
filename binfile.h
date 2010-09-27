@@ -1,5 +1,5 @@
 /* MSPDebug - debugging tool for the eZ430
- * Copyright (C) 2009 Daniel Beer
+ * Copyright (C) 2009, 2010 Daniel Beer
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,13 +16,22 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef RF2500_H_
-#define RF2500_H_
+#ifndef BINFILE_H_
+#define BINFILE_H_
 
-/* Search the USB bus for the first eZ430-RF2500, and initialize it. If
- * successful, 0 is returned and the fet_* functions are ready for use.
- * If an error occurs, -1 is returned.
- */
-int rf2500_open(void);
+#include <stdio.h>
+#include <sys/types.h>
+
+/* Callback for binary image data */
+typedef int (*imgfunc_t)(u_int16_t addr, const u_int8_t *data, int len);
+
+/* Intel HEX file support */
+int ihex_check(FILE *in);
+int ihex_extract(FILE *in, imgfunc_t cb);
+
+/* ELF32 file support */
+int elf32_check(FILE *in);
+int elf32_extract(FILE *in, imgfunc_t cb);
+int elf32_syms(FILE *in);
 
 #endif

@@ -1,5 +1,5 @@
 # MSPDebug - debugging tool for the eZ430
-# Copyright (C) 2009 Daniel Beer
+# Copyright (C) 2009, 2010 Daniel Beer
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -25,7 +25,8 @@ clean:
 
 .SUFFIXES: .c .o
 
-mspdebug: main.o fet.o rf2500.o dis.o uif.o
+mspdebug: main.o fet.o rf2500.o dis.o uif.o ihex.o elf32.o stab.o util.o \
+	  bsl.o sim.o
 	$(CC) $(CFLAGS) -o $@ $^ -lusb
 
 .c.o:

@@ -25,41 +25,12 @@
 #include <unistd.h>
 
 #include "dis.h"
-#include "fet.h"
-#include "rf2500.h"
-#include "uif.h"
+#include "device.h"
+#include "binfile.h"
+#include "stab.h"
+#include "util.h"
 
-void hexdump(int addr, const char *data, int len)
-{
-	int offset = 0;
-
-	while (offset < len) {
-		int i, j;
-
-		/* Address label */
-		printf("    %04x:", offset + addr);
-
-		/* Hex portion */
-		for (i = 0; i < 16 && offset + i < len; i++)
-			printf(" %02x",
-				((const unsigned char *)data)[offset + i]);
-		for (j = i; j < 16; j++)
-			printf("   ");
-
-		/* Printable characters */
-		printf(" |");
-		for (j = 0; j < i; j++) {
-			int c = ((const unsigned char *)data)[offset + j];
-
-			printf("%c", (c >= 32 && c <= 126) ? c : '.');
-		}
-		for (; j < 16; j++)
-			printf(" ");
-		printf("|\n");
-
-		offset += i;
-	}
-}
+static const struct device *msp430_dev;
 
 /**********************************************************************
  * Command-line interface
@@ -93,7 +64,7 @@ char *get_arg(char **text)
 }
 
 #define REG_COLUMNS	4
-#define REG_ROWS	((FET_NUM_REGS + REG_COLUMNS - 1) / REG_COLUMNS)
+#define REG_ROWS	((DEVICE_NUM_REGS + REG_COLUMNS - 1) / REG_COLUMNS)
 
 static void show_regs(u_int16_t *regs)
 {
@@ -106,7 +77,7 @@ static void show_regs(u_int16_t *regs)
 		for (j = 0; j < REG_COLUMNS; j++) {
 			int k = j * REG_ROWS + i;
 
-			if (k < FET_NUM_REGS)
+			if (k < DEVICE_NUM_REGS)
 				printf("(r%02d: %04x)  ", k, regs[k]);
 		}
 		printf("\n");
@@ -127,30 +98,34 @@ static int cmd_md(char **arg)
 {
 	char *off_text = get_arg(arg);
 	char *len_text = get_arg(arg);
-	unsigned int offset = 0;
-	unsigned int length = 0;
+	int offset = 0;
+	int length = 0x40;
 
 	if (!off_text) {
 		fprintf(stderr, "md: offset must be specified\n");
 		return -1;
 	}
 
-	sscanf(off_text, "%x", &offset);
-	if (len_text)
-		sscanf(len_text, "%x", &length);
-	else
-		length = 0x80;
-	if (offset >= 0x10000 || length > 0x10000 ||
-	    (offset + length) > 0x10000) {
+	if (stab_parse(off_text, &offset) < 0) {
+		fprintf(stderr, "md: can't parse offset: %s\n", off_text);
+		return -1;
+	}
+
+	if (len_text && stab_parse(len_text, &length) < 0) {
+		fprintf(stderr, "md: can't parse length: %s\n", len_text);
+		return -1;
+	}
+
+	if (offset < 0 || length <= 0 || (offset + length) > 0x10000) {
 		fprintf(stderr, "md: memory out of range\n");
 		return -1;
 	}
 
 	while (length) {
-		char buf[128];
+		u_int8_t buf[128];
 		int blen = length > sizeof(buf) ? sizeof(buf) : length;
 
-		if (fet_read_mem(offset, buf, blen) < 0)
+		if (msp430_dev->readmem(offset, buf, blen) < 0)
 			return -1;
 		hexdump(offset, buf, blen);
 
@@ -163,11 +138,23 @@ static int cmd_md(char **arg)
 
 static void disassemble(u_int16_t offset, u_int8_t *data, int length)
 {
+	int first_line = 1;
+
 	while (length) {
 		struct msp430_instruction insn;
 		int retval;
 		int count;
 		int i;
+		u_int16_t oboff = offset;
+		const char *obname;
+
+		if (stab_find(&oboff, &obname) >= 0) {
+			if (!oboff)
+				printf("%s:\n", obname);
+			else if (first_line)
+				printf("%s+0x%x:\n", obname, oboff);
+		}
+		first_line = 0;
 
 		retval = dis_decode(data, offset, length, &insn);
 		count = retval > 0 ? retval : 2;
@@ -178,7 +165,7 @@ static void disassemble(u_int16_t offset, u_int8_t *data, int length)
 		for (i = 0; i < count; i++)
 			printf(" %02x", data[i]);
 
-		while (i < 8) {
+		while (i < 7) {
 			printf("   ");
 			i++;
 		}
@@ -202,49 +189,183 @@ static int cmd_dis(char **arg)
 {
 	char *off_text = get_arg(arg);
 	char *len_text = get_arg(arg);
-	unsigned int offset = 0;
-	unsigned int length = 0;
-	char buf[128];
+	int offset = 0;
+	int length = 0x40;
+	u_int8_t buf[512];
 
 	if (!off_text) {
 		fprintf(stderr, "md: offset must be specified\n");
 		return -1;
 	}
 
-	sscanf(off_text, "%x", &offset);
-	if (len_text)
-		sscanf(len_text, "%x", &length);
-	else
-		length = 0x40;
-	if (offset >= 0x10000 || length > sizeof(buf) ||
+	if (stab_parse(off_text, &offset) < 0) {
+		fprintf(stderr, "dis: can't parse offset: %s\n", off_text);
+		return -1;
+	}
+
+	if (len_text && stab_parse(len_text, &length) < 0) {
+		fprintf(stderr, "dis: can't parse length: %s\n", len_text);
+		return -1;
+	}
+
+	if (offset < 0 || length <= 0 || length > sizeof(buf) ||
 	    (offset + length) > 0x10000) {
 		fprintf(stderr, "dis: memory out of range\n");
 		return -1;
 	}
 
-	if (fet_read_mem(offset, buf, length) < 0)
+	if (msp430_dev->readmem(offset, buf, length) < 0)
 		return -1;
 
 	disassemble(offset, (u_int8_t *)buf, length);
 	return 0;
 }
 
+/************************************************************************
+ * Hex dumper
+ */
+
+static FILE *hexout_file;
+static u_int16_t hexout_addr;
+static u_int8_t hexout_buf[16];
+static int hexout_len;
+
+static int hexout_start(const char *filename)
+{
+	hexout_file = fopen(filename, "w");
+	if (!hexout_file) {
+		perror("hexout: couldn't open output file");
+		return -1;
+	}
+
+	return 0;
+}
+
+static int hexout_flush(void)
+{
+	int i;
+	int cksum = 0;
+
+	if (!hexout_len)
+		return 0;
+
+	if (fprintf(hexout_file, ":%02X%04X00", hexout_len, hexout_addr) < 0)
+		goto fail;
+	cksum += hexout_len;
+	cksum += hexout_addr & 0xff;
+	cksum += hexout_addr >> 8;
+
+	for (i = 0; i < hexout_len; i++) {
+		if (fprintf(hexout_file, "%02X", hexout_buf[i]) < 0)
+			goto fail;
+		cksum += hexout_buf[i];
+	}
+
+	if (fprintf(hexout_file, "%02X\n", ~(cksum - 1) & 0xff) < 0)
+		goto fail;
+
+	hexout_len = 0;
+	return 0;
+
+fail:
+	perror("hexout: can't write HEX data");
+	return -1;
+}
+
+static int hexout_feed(u_int16_t addr, const u_int8_t *buf, int len)
+{
+	while (len) {
+		int count;
+
+		if ((hexout_addr + hexout_len != addr ||
+		     hexout_len >= sizeof(hexout_buf)) &&
+		    hexout_flush() < 0)
+			return -1;
+
+		if (!hexout_len)
+			hexout_addr = addr;
+
+		count = sizeof(hexout_buf) - hexout_len;
+		if (count > len)
+			count = len;
+
+		memcpy(hexout_buf + hexout_len, buf, count);
+		hexout_len += count;
+
+		addr += count;
+		buf += count;
+		len -= count;
+	}
+
+	return 0;
+}
+
+static int cmd_hexout(char **arg)
+{
+	char *off_text = get_arg(arg);
+	char *len_text = get_arg(arg);
+	char *filename = *arg;
+	int off;
+	int length;
+
+	if (!(off_text && len_text && *filename)) {
+		fprintf(stderr, "hexout: need offset, length and filename\n");
+		return -1;
+	}
+
+	if (stab_parse(off_text, &off) < 0 ||
+	    stab_parse(len_text, &length) < 0)
+		return -1;
+
+	if (hexout_start(filename) < 0)
+		return -1;
+
+	while (length) {
+		u_int8_t buf[128];
+		int count = length;
+
+		if (count > sizeof(buf))
+			count = sizeof(buf);
+
+		printf("Reading %d bytes from 0x%04x...\n", count, off);
+		if (msp430_dev->readmem(off, buf, count) < 0) {
+			perror("hexout: can't read memory");
+			goto fail;
+		}
+
+		if (hexout_feed(off, buf, count) < 0)
+			goto fail;
+
+		length -= count;
+		off += count;
+	}
+
+	hexout_flush();
+	fclose(hexout_file);
+	return 0;
+
+fail:
+	fclose(hexout_file);
+	unlink(filename);
+	return -1;
+}
+
 static int cmd_reset(char **arg)
 {
-	return fet_reset(FET_RESET_ALL | FET_RESET_HALT);
+	return msp430_dev->control(DEVICE_CTL_RESET);
 }
 
 static int cmd_regs(char **arg)
 {
-	u_int16_t regs[FET_NUM_REGS];
-	char code[16];
+	u_int16_t regs[DEVICE_NUM_REGS];
+	u_int8_t code[16];
 
-	if (fet_get_context(regs) < 0)
+	if (msp430_dev->getregs(regs) < 0)
 		return -1;
 	show_regs(regs);
 
 	/* Try to disassemble the instruction at PC */
-	if (fet_read_mem(regs[0], code, sizeof(code)) < 0)
+	if (msp430_dev->readmem(regs[0], code, sizeof(code)) < 0)
 		return 0;
 
 	disassemble(regs[0], (u_int8_t *)code, sizeof(code));
@@ -254,31 +375,33 @@ static int cmd_regs(char **arg)
 static int cmd_run(char **arg)
 {
 	char *bp_text = get_arg(arg);
+	int bp_addr;
 
 	if (bp_text) {
-		unsigned int addr = 0;
+		if (stab_parse(bp_text, &bp_addr) < 0) {
+			fprintf(stderr, "run: can't parse breakpoint: %s\n",
+				bp_text);
+			return -1;
+		}
 
-		sscanf(bp_text, "%x", &addr);
-		fet_break(0, addr);
-	} else {
-		fet_break(0, 0);
+		msp430_dev->breakpoint(bp_addr);
 	}
 
-	if (fet_run(bp_text ? FET_RUN_BREAKPOINT : FET_RUN_FREE) < 0)
+	if (msp430_dev->control(bp_text ?
+		DEVICE_CTL_RUN_BP : DEVICE_CTL_RUN) < 0)
 		return -1;
 
-	printf("Running. Press Ctrl+C to interrupt...");
+	if (bp_text)
+		printf("Running to 0x%04x.", bp_addr);
+	else
+		printf("Running.");
+	printf(" Press Ctrl+C to interrupt...");
 	fflush(stdout);
 
-	for (;;) {
-		int r = fet_poll();
-
-		if (r < 0 || !(r & FET_POLL_RUNNING))
-			break;
-	}
-
+	msp430_dev->wait();
 	printf("\n");
-	if (fet_stop() < 0)
+
+	if (msp430_dev->control(DEVICE_CTL_HALT) < 0)
 		return -1;
 
 	return cmd_regs(NULL);
@@ -289,8 +412,8 @@ static int cmd_set(char **arg)
 	char *reg_text = get_arg(arg);
 	char *val_text = get_arg(arg);
 	int reg;
-	unsigned int value = 0;
-	u_int16_t regs[FET_NUM_REGS];
+	int value = 0;
+	u_int16_t regs[DEVICE_NUM_REGS];
 
 	if (!(reg_text && val_text)) {
 		fprintf(stderr, "set: must specify a register and a value\n");
@@ -300,17 +423,21 @@ static int cmd_set(char **arg)
 	while (*reg_text && !isdigit(*reg_text))
 		reg_text++;
 	reg = atoi(reg_text);
-	sscanf(val_text, "%x", &value);
 
-	if (reg < 0 || reg >= FET_NUM_REGS) {
+	if (stab_parse(val_text, &value) < 0) {
+		fprintf(stderr, "set: can't parse value: %s\n", val_text);
+		return -1;
+	}
+
+	if (reg < 0 || reg >= DEVICE_NUM_REGS) {
 		fprintf(stderr, "set: register out of range: %d\n", reg);
 		return -1;
 	}
 
-	if (fet_get_context(regs) < 0)
+	if (msp430_dev->getregs(regs) < 0)
 		return -1;
 	regs[reg] = value;
-	if (fet_set_context(regs) < 0)
+	if (msp430_dev->setregs(regs) < 0)
 		return -1;
 
 	show_regs(regs);
@@ -319,115 +446,82 @@ static int cmd_set(char **arg)
 
 static int cmd_step(char **arg)
 {
-	if (fet_run(FET_RUN_STEP) < 0)
-		return -1;
-	if (fet_poll() < 0)
+	if (msp430_dev->control(DEVICE_CTL_STEP) < 0)
 		return -1;
 
 	return cmd_regs(NULL);
 }
 
-static int hexval(const char *text, int len)
-{
-	int value = 0;
+/************************************************************************
+ * Flash image programming state machine.
+ */
 
-	while (len && *text) {
-		value <<= 4;
-
-		if (*text >= 'A' && *text <= 'F')
-			value += *text - 'A' + 10;
-		else if (*text >= 'a' && *text <= 'f')
-			value += *text - 'a' + 10;
-		else if (isdigit(*text))
-			value += *text - '0';
-
-		text++;
-		len--;
-	}
-
-	return value;
-}
-
-static char prog_buf[128];
+static u_int8_t prog_buf[128];
 static u_int16_t prog_addr;
 static int prog_len;
+static int prog_have_erased;
+
+static void prog_init(void)
+{
+	prog_len = 0;
+	prog_have_erased = 0;
+}
 
 static int prog_flush(void)
 {
-	int wlen = prog_len;
+	while (prog_len) {
+		int wlen = prog_len;
 
-	if (!prog_len)
-		return 0;
+		/* Writing across this address seems to cause a hang */
+		if (prog_addr < 0x999a && wlen + prog_addr > 0x999a)
+			wlen = 0x999a - prog_addr;
 
-	/* Writing across this address seems to cause a hang */
-	if (prog_addr < 0x999a && wlen + prog_addr > 0x999a)
-		wlen = 0x999a - prog_addr;
+		if (!prog_have_erased) {
+			printf("Erasing...\n");
+			if (msp430_dev->control(DEVICE_CTL_ERASE) < 0)
+				return -1;
+			prog_have_erased = 1;
+		}
 
-	printf("Writing %3d bytes to %04x...\n", wlen, prog_addr);
+		printf("Writing %3d bytes to %04x...\n", wlen, prog_addr);
+		if (msp430_dev->writemem(prog_addr, prog_buf, wlen) < 0)
+		        return -1;
 
-	if (fet_write_mem(prog_addr, prog_buf, wlen) < 0)
-		return -1;
-
-	memmove(prog_buf, prog_buf + wlen, prog_len - wlen);
-	prog_len -= wlen;
-	prog_addr += wlen;
-
-	return 0;
-}
-
-static int prog_hex(int lno, const char *hex)
-{
-	int len = strlen(hex);
-	int count, address, type, cksum = 0;
-	int i;
-
-	if (*hex != ':')
-		return 0;
-
-	hex++;
-	len--;
-
-	while (len && isspace(hex[len - 1]))
-		len--;
-
-	if (len < 10)
-		return 0;
-
-	count = hexval(hex, 2);
-	address = hexval(hex + 2, 4);
-	type = hexval(hex + 6, 2);
-
-	if (type)
-		return 0;
-
-	for (i = 0; i + 2 < len; i += 2)
-		cksum = (cksum + hexval(hex + i, 2))
-			& 0xff;
-	cksum = ~(cksum - 1) & 0xff;
-
-	if (count * 2 + 10 != len) {
-		fprintf(stderr, "warning: length mismatch at line %d\n", lno);
-		count = (len - 10) / 2;
+		memmove(prog_buf, prog_buf + wlen, prog_len - wlen);
+		prog_len -= wlen;
+		prog_addr += wlen;
 	}
 
-	if (cksum != hexval(hex + len - 2, 2))
-		fprintf(stderr, "warning: invalid checksum at line %d\n", lno);
+        return 0;
+}
 
-	for (i = 0; i < count; i++) {
-		int offset;
+static int prog_feed(u_int16_t addr, const u_int8_t *data, int len)
+{
+	/* Flush if this section is discontiguous */
+	if (prog_len && prog_addr + prog_len != addr && prog_flush() < 0)
+		return -1;
 
-		offset = address + i - prog_addr;
-		if (offset < 0 || offset >= sizeof(prog_buf))
+	if (!prog_len)
+		prog_addr = addr;
+
+	/* Add the buffer in piece by piece, flushing when it gets
+	 * full.
+	 */
+	while (len) {
+		int count = sizeof(prog_buf) - prog_len;
+
+		if (count > len)
+			count = len;
+
+		if (!count) {
 			if (prog_flush() < 0)
 				return -1;
-
-		if (!prog_len)
-			prog_addr = address + i;
-
-		offset = address + i - prog_addr;
-		prog_buf[offset] = hexval(hex + 8 + i * 2, 2);
-		if (offset + 1 > prog_len)
-			prog_len = offset + 1;
+		} else {
+			memcpy(prog_buf + prog_len, data, count);
+			prog_len += count;
+			data += count;
+			len -= count;
+		}
 	}
 
 	return 0;
@@ -436,38 +530,91 @@ static int prog_hex(int lno, const char *hex)
 static int cmd_prog(char **arg)
 {
 	FILE *in = fopen(*arg, "r");
-	char text[256];
-	int lno = 1;
+	int result = 0;
 
 	if (!in) {
 		fprintf(stderr, "prog: %s: %s\n", *arg, strerror(errno));
 		return -1;
 	}
 
-	printf("Erasing...\n");
-	if (fet_erase(FET_ERASE_ALL, 0x1000, 0x100) < 0) {
+	if (msp430_dev->control(DEVICE_CTL_HALT) < 0) {
 		fclose(in);
 		return -1;
 	}
 
-	if (fet_reset(FET_RESET_ALL | FET_RESET_HALT) < 0)
-		return -1;
+	prog_init();
 
-	prog_len = 0;
-	while (fgets(text, sizeof(text), in))
-		if (prog_hex(lno++, text) < 0) {
-			fclose(in);
-			return -1;
-		}
+	if (elf32_check(in)) {
+		result = elf32_extract(in, prog_feed);
+		stab_clear();
+		elf32_syms(in);
+	} else if (ihex_check(in)) {
+		result = ihex_extract(in, prog_feed);
+	} else {
+		fprintf(stderr, "%s: unknown file type\n", *arg);
+	}
+
+	if (!result)
+		result = prog_flush();
+
 	fclose(in);
+	return result;
+}
 
-	if (prog_flush() < 0)
+static int cmd_nosyms(char **arg)
+{
+	stab_clear();
+	return 0;
+}
+
+static int cmd_eval(char **arg)
+{
+	int addr;
+	u_int16_t offset;
+	const char *name;
+
+	if (stab_parse(*arg, &addr) < 0) {
+		fprintf(stderr, "=: can't parse: %s\n", *arg);
 		return -1;
+	}
 
-	return fet_reset(FET_RESET_ALL | FET_RESET_HALT);
+	printf("0x%04x", addr);
+	offset = addr;
+	if (!stab_find(&offset, &name)) {
+		printf(" = %s", name);
+		if (offset)
+			printf("+0x%x", offset);
+	}
+	printf("\n");
+
+	return 0;
+}
+
+static int cmd_syms(char **arg)
+{
+	FILE *in = fopen(*arg, "r");
+	int result = 0;
+
+	if (!in) {
+		fprintf(stderr, "syms: %s: %s\n", *arg, strerror(errno));
+		return -1;
+	}
+
+	stab_clear();
+
+	if (elf32_check(in))
+		result = elf32_syms(in);
+	else
+		fprintf(stderr, "syms: %s: unknown file type\n", *arg);
+
+	fclose(in);
+	return result;
 }
 
 static const struct command all_commands[] = {
+	{"=",		cmd_eval,
+"= <expression>\n"
+"    Evaluate an expression using the symbol table.\n"},
 	{"dis",		cmd_dis,
 "dis <address> <range>\n"
 "    Disassemble a section of memory.\n"},
@@ -475,13 +622,20 @@ static const struct command all_commands[] = {
 "help [command]\n"
 "    Without arguments, displays a list of commands. With a command name as\n"
 "    an argument, displays help for that command.\n"},
+	{"hexout",	cmd_hexout,
+"hexout <address> <length> <filename.hex>\n"
+"    Save a region of memory into a HEX file.\n"},
 	{"md",		cmd_md,
 "md <address> <length>\n"
 "    Read the specified number of bytes from memory at the given address,\n"
 "    and display a hexdump.\n"},
+	{"nosyms",	cmd_nosyms,
+"nosyms\n"
+"    Clear the symbol table.\n"},
 	{"prog",	cmd_prog,
-"prog <filename.hex>\n"
-"    Erase the device and flash the data contained in an Intel HEX file.\n"},
+"prog <filename>\n"
+"    Erase the device and flash the data contained in a binary file. This\n"
+"    command also loads symbols from the file, if available.\n"},
 	{"regs",	cmd_regs,
 "regs\n"
 "    Read and display the current register contents.\n"},
@@ -498,15 +652,16 @@ static const struct command all_commands[] = {
 	{"step",	cmd_step,
 "step\n"
 "    Single-step the CPU, and display the register state.\n"},
+	{"syms",	cmd_syms,
+"syms <filename>\n"
+"    Load symbols from the given file.\n"},
 };
-
-#define NUM_COMMANDS (sizeof(all_commands) / sizeof(all_commands[0]))
 
 const struct command *find_command(const char *name)
 {
 	int i;
 
-	for (i = 0; i < NUM_COMMANDS; i++)
+	for (i = 0; i < ARRAY_LEN(all_commands); i++)
 		if (!strcasecmp(name, all_commands[i].name))
 			return &all_commands[i];
 
@@ -528,11 +683,40 @@ static int cmd_help(char **arg)
 		fputs(cmd->help, stdout);
 	} else {
 		int i;
+		int max_len = 0;
+		int rows, cols;
 
-		printf("Available commands:");
-		for (i = 0; i < NUM_COMMANDS; i++)
-			printf(" %s", all_commands[i].name);
-		printf("\n");
+		for (i = 0; i < ARRAY_LEN(all_commands); i++) {
+			int len = strlen(all_commands[i].name);
+
+			if (len > max_len)
+				max_len = len;
+		}
+
+		max_len += 2;
+		cols = 72 / max_len;
+		rows = (ARRAY_LEN(all_commands) + cols - 1) / cols;
+
+		printf("Available commands:\n");
+		for (i = 0; i < rows; i++) {
+			int j;
+
+			printf("    ");
+			for (j = 0; j < cols; j++) {
+				int k = j * rows + i;
+				const struct command *cmd = &all_commands[k];
+
+				if (k >= ARRAY_LEN(all_commands))
+					break;
+
+				printf("%s", cmd->name);
+				for (k = strlen(cmd->name); k < max_len; k++)
+					printf(" ");
+			}
+
+			printf("\n");
+		}
+
 		printf("Type \"help <command>\" for more information.\n");
 		printf("Press Ctrl+D to quit.\n");
 	}
@@ -597,12 +781,19 @@ static void reader_loop(void)
 
 static void usage(const char *progname)
 {
-	fprintf(stderr, "Usage: %s [-u device] [-j] [command ...]\n"
+	fprintf(stderr,
+"Usage: %s [-u device] [-j] [-B] [-s] [-v voltage] [command ...]\n"
 "\n"
 "    -u device\n"
 "        Open the given tty device (MSP430 UIF compatible devices).\n"
 "    -j\n"
 "        Use JTAG, rather than spy-bi-wire (UIF devices only).\n"
+"    -v voltage\n"
+"        Set the supply voltage, in millivolts.\n"
+"    -B device\n"
+"        Debug the FET itself through the bootloader.\n"
+"    -s\n"
+"        Start in simulation mode (only memory IO is allowed).\n"
 "\n"
 "By default, the first RF2500 device on the USB bus is opened.\n"
 "\n"
@@ -613,25 +804,42 @@ static void usage(const char *progname)
 
 int main(int argc, char **argv)
 {
+	const struct fet_transport *trans;
 	const char *uif_device = NULL;
+	const char *bsl_device = NULL;
 	int opt;
-	int result;
+	int flags = 0;
 	int want_jtag = 0;
+	int want_sim = 0;
+	int vcc_mv = 3000;
 
 	puts(
-"MSPDebug version 0.3 - debugging tool for the eZ430\n"
+"MSPDebug version 0.4 - debugging tool for the eZ430\n"
 "Copyright (C) 2009, 2010 Daniel Beer <dlbeer@gmail.com>\n"
 "This is free software; see the source for copying conditions.  There is NO\n"
 "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n");
 
-	while ((opt = getopt(argc, argv, "u:j")) >= 0)
+	/* Parse arguments */
+	while ((opt = getopt(argc, argv, "u:jv:B:s")) >= 0)
 		switch (opt) {
 		case 'u':
 			uif_device = optarg;
 			break;
 
+		case 'v':
+			vcc_mv = atoi(optarg);
+			break;
+
 		case 'j':
 			want_jtag = 1;
+			break;
+
+		case 'B':
+			bsl_device = optarg;
+			break;
+
+		case 's':
+			want_sim = 1;
 			break;
 
 		default:
@@ -639,15 +847,34 @@ int main(int argc, char **argv)
 			return -1;
 		}
 
-	/* Open the appropriate device */
-	if (uif_device)
-		result = uif_open(uif_device, want_jtag);
-	else
-		result = rf2500_open();
+	/* Open a device */
+	if (want_sim) {
+		msp430_dev = sim_open();
+	} else if (bsl_device) {
+		msp430_dev = bsl_open(bsl_device);
+	} else {
+		/* Open the appropriate transport */
+		if (uif_device) {
+			trans = uif_open(uif_device);
+		} else {
+			trans = rf2500_open();
+			flags |= FET_PROTO_RF2500;
+		}
 
-	if (result < 0)
+		if (!trans)
+			return -1;
+
+		/* Then initialize the device */
+		if (!want_jtag)
+			flags |= FET_PROTO_SPYBIWIRE;
+
+		msp430_dev = fet_open(trans, flags, vcc_mv);
+	}
+
+	if (!msp430_dev)
 		return -1;
 
+	/* Process commands */
 	if (optind < argc) {
 		while (optind < argc)
 			process_command(argv[optind++]);
@@ -655,8 +882,6 @@ int main(int argc, char **argv)
 		reader_loop();
 	}
 
-	fet_run(FET_RUN_FREE | FET_RUN_RELEASE);
-	fet_close();
-
+	msp430_dev->close();
 	return 0;
 }

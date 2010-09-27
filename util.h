@@ -1,5 +1,5 @@
 /* MSPDebug - debugging tool for the eZ430
- * Copyright (C) 2009 Daniel Beer
+ * Copyright (C) 2009, 2010 Daniel Beer
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,13 +16,19 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef UIF_H_
-#define UIF_H_
+#ifndef UTIL_H_
+#define UTIL_H_
 
-/* This function is for opening an eZ430-F2013 or FET430UIF device via
- * a kernel-supported serial interface. The argument given should be the
- * filename of the relevant tty device.
- */
-int uif_open(const char *device, int want_jtag);
+#include <sys/types.h>
+
+void hexdump(int addr, const u_int8_t *data, int len);
+
+#define ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
+
+void print_devid(const u_int16_t id);
+
+int open_serial(const char *device, int rate);
+int read_with_timeout(int fd, u_int8_t *data, int len);
+int write_all(int fd, const u_int8_t *data, int len);
 
 #endif

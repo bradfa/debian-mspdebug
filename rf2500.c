@@ -1,5 +1,5 @@
 /* MSPDebug - debugging tool for the eZ430
- * Copyright (C) 2009 Daniel Beer
+ * Copyright (C) 2009, 2010 Daniel Beer
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,9 +20,8 @@
 #include <string.h>
 #include <usb.h>
 
-#include "fet.h"
-
-void hexdump(int addr, const char *data, int len);
+#include "transport.h"
+#include "util.h"
 
 /*********************************************************************
  * USB transport
@@ -53,16 +52,16 @@ static int usbtr_open_interface(struct usb_device *dev, int ino)
 
 	usbtr_handle = usb_open(dev);
 	if (!usbtr_handle) {
-		perror("usbtr_open_interface: can't open device");
+		perror("rf2500: can't open device");
 		return -1;
 	}
 
 	if (usb_detach_kernel_driver_np(usbtr_handle, usbtr_int_number) < 0)
-		perror("usbtr_open_interface: warning: can't "
+		perror("rf2500: warning: can't "
 			"detach kernel driver");
 
 	if (usb_claim_interface(usbtr_handle, usbtr_int_number) < 0) {
-		perror("usbtr_open_interface: can't claim interface");
+		perror("rf2500: can't claim interface");
 		usb_close(usbtr_handle);
 		return -1;
 	}
@@ -87,10 +86,10 @@ static int usbtr_open_device(struct usb_device *dev)
 	return -1;
 }
 
-static int usbtr_send(const char *data, int len)
+static int usbtr_send(const u_int8_t *data, int len)
 {
 	while (len) {
-		char pbuf[256];
+		u_int8_t pbuf[256];
 		int plen = len > 255 ? 255 : len;
 		int txlen = plen + 1;
 
@@ -112,8 +111,8 @@ static int usbtr_send(const char *data, int len)
 		hexdump(0, pbuf, txlen);
 #endif
 		if (usb_bulk_write(usbtr_handle, USB_FET_OUT_EP,
-			pbuf, txlen, 10000) < 0) {
-			perror("usbtr_send");
+			(const char *)pbuf, txlen, 10000) < 0) {
+			perror("rf2500: can't send data");
 			return -1;
 		}
 
@@ -124,26 +123,29 @@ static int usbtr_send(const char *data, int len)
 	return 0;
 }
 
-static char usbtr_buf[64];
+static u_int8_t usbtr_buf[64];
 static int usbtr_len;
 static int usbtr_offset;
 
-static void usbtr_flush(void)
+static int usbtr_flush(void)
 {
 	char buf[64];
 
 	while (usb_bulk_read(usbtr_handle, USB_FET_IN_EP,
 			buf, sizeof(buf), 100) >= 0);
+
+	return 0;
 }
 
-static int usbtr_recv(char *databuf, int max_len)
+static int usbtr_recv(u_int8_t *databuf, int max_len)
 {
 	int rlen;
 
 	if (usbtr_offset >= usbtr_len) {
 		if (usb_bulk_read(usbtr_handle, USB_FET_IN_EP,
-				usbtr_buf, sizeof(usbtr_buf), 10000) < 0) {
-			perror("usbtr_recv");
+				(char *)usbtr_buf, sizeof(usbtr_buf),
+				10000) < 0) {
+			perror("rf2500: can't receive data");
 			return -1;
 		}
 
@@ -174,12 +176,13 @@ static void usbtr_close(void)
 }
 
 static const struct fet_transport usbtr_transport = {
+	.flush = usbtr_flush,
 	.send = usbtr_send,
 	.recv = usbtr_recv,
 	.close = usbtr_close
 };
 
-int rf2500_open(void)
+const struct fet_transport *rf2500_open(void)
 {
 	struct usb_bus *bus;
 
@@ -195,19 +198,11 @@ int rf2500_open(void)
 			    dev->descriptor.idProduct == USB_FET_PRODUCT &&
 			    !usbtr_open_device(dev)) {
 				usbtr_flush();
-
-				if (fet_open(&usbtr_transport,
-					 FET_PROTO_SPYBIWIRE |
-					 FET_PROTO_RF2500, 3000) < 0) {
-					usbtr_close();
-					return -1;
-				}
-
-				return 0;
+				return &usbtr_transport;
 			}
 		}
 	}
 
-	fprintf(stderr, "usbtr_open: no devices could be found\n");
-	return -1;
+	fprintf(stderr, "rf2500: no devices could be found\n");
+	return NULL;
 }

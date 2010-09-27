@@ -1,5 +1,5 @@
 /* MSPDebug - debugging tool for the eZ430
- * Copyright (C) 2009 Daniel Beer
+ * Copyright (C) 2009, 2010 Daniel Beer
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,22 +21,16 @@
 #include <errno.h>
 #include <assert.h>
 #include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <termios.h>
 #include <unistd.h>
+#include <termios.h>
 
-#include "uif.h"
-#include "fet.h"
-
-void hexdump(int addr, const char *data, int len);
+#include "transport.h"
+#include "util.h"
 
 static int serial_fd = -1;
 
-static int serial_send(const char *data, int len)
+static int serial_send(const u_int8_t *data, int len)
 {
-	int result;
-
 	assert (serial_fd >= 0);
 
 #ifdef DEBUG_SERIAL
@@ -44,41 +38,31 @@ static int serial_send(const char *data, int len)
 	hexdump(0, data, len);
 #endif
 
-	while (len) {
-		result = write(serial_fd, data, len);
-		if (result < 0) {
-			if (errno == EINTR)
-				continue;
-
-			perror("serial_send");
-			return -1;
-		}
-
-		data += result;
-		len -= result;
+	if (write_all(serial_fd, data, len) < 0) {
+		perror("uif: write error");
+		return -1;
 	}
 
 	return 0;
 }
 
-static int serial_recv(char *data, int max_len)
+static int serial_recv(u_int8_t *data, int max_len)
 {
-	int len;
+	int r;
 
 	assert (serial_fd >= 0);
 
-	len = read(serial_fd, data, max_len);
-
-	if (len < 0) {
-		perror("serial_recv");
+	r = read_with_timeout(serial_fd, data, max_len);
+	if (r < 0) {
+		perror("uif: read error");
 		return -1;
 	}
 
 #ifdef DEBUG_SERIAL
 	puts("Serial transfer in:");
-	hexdump(0, data, len);
+	hexdump(0, data, r);
 #endif
-	return len;
+	return r;
 }
 
 static void serial_close(void)
@@ -88,39 +72,33 @@ static void serial_close(void)
 	close(serial_fd);
 }
 
+static int serial_flush(void)
+{
+	if (tcflush(serial_fd, TCIFLUSH) < 0) {
+		perror("uif: tcflush");
+		return -1;
+	}
+
+	return 0;
+}
+
 static const struct fet_transport serial_transport = {
+	.flush = serial_flush,
 	.send = serial_send,
 	.recv = serial_recv,
 	.close = serial_close
 };
 
-int uif_open(const char *device, int want_jtag)
+const struct fet_transport *uif_open(const char *device)
 {
-	struct termios attr;
-
 	printf("Trying to open UIF on %s...\n", device);
 
-	serial_fd = open(device, O_RDWR | O_NOCTTY);
+	serial_fd = open_serial(device, B460800);
 	if (serial_fd < 0) {
-		fprintf(stderr, "uif_open: open: %s: %s\n",
+		fprintf(stderr, "uif: can't open serial device: %s: %s\n",
 			device, strerror(errno));
-		return -1;
+		return NULL;
 	}
 
-	tcgetattr(serial_fd, &attr);
-	cfmakeraw(&attr);
-	cfsetspeed(&attr, B460800);
-	if (tcsetattr(serial_fd, TCSAFLUSH, &attr) < 0) {
-		fprintf(stderr, "uif_open: tcsetattr: %s: %s\n",
-			device, strerror(errno));
-		return -1;
-	}
-
-	if (fet_open(&serial_transport, want_jtag ? 0 : FET_PROTO_SPYBIWIRE,
-			3000) < 0) {
-		close(serial_fd);
-		return -1;
-	}
-
-	return 0;
+	return &serial_transport;
 }
