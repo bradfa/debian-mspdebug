@@ -23,11 +23,17 @@
 #include <errno.h>
 #include <unistd.h>
 
+#ifdef USE_READLINE
+#include <readline/readline.h>
+#include <readline/history.h>
+#endif
+
 #include "dis.h"
 #include "device.h"
 #include "binfile.h"
 #include "stab.h"
 #include "util.h"
+#include "gdb.h"
 
 static const struct device *msp430_dev;
 
@@ -62,6 +68,53 @@ char *get_arg(char **text)
 	return start;
 }
 
+struct command {
+	const char	*name;
+	int		(*func)(char **arg);
+	const char	*help;
+};
+
+static const struct command all_commands[];
+
+const struct command *find_command(const char *name)
+{
+	int i;
+
+	for (i = 0; all_commands[i].name; i++)
+		if (!strcasecmp(name, all_commands[i].name))
+			return &all_commands[i];
+
+	return NULL;
+}
+
+static int process_command(char *arg)
+{
+	const char *cmd_text;
+	int len = strlen(arg);
+
+	while (len && isspace(arg[len - 1]))
+		len--;
+	arg[len] = 0;
+
+	cmd_text = get_arg(&arg);
+	if (cmd_text) {
+		const struct command *cmd = find_command(cmd_text);
+
+		if (cmd)
+			return cmd->func(&arg);
+
+		fprintf(stderr, "unknown command: %s (try \"help\")\n",
+			cmd_text);
+		return -1;
+	}
+
+	return 0;
+}
+
+/************************************************************************
+ * Command definitions
+ */
+
 #define REG_COLUMNS	4
 #define REG_ROWS	((DEVICE_NUM_REGS + REG_COLUMNS - 1) / REG_COLUMNS)
 
@@ -82,16 +135,6 @@ static void show_regs(u_int16_t *regs)
 		printf("\n");
 	}
 }
-
-struct command {
-	const char	*name;
-	int		(*func)(char **arg);
-	const char	*help;
-};
-
-static const struct command all_commands[];
-
-static int cmd_help(char **arg);
 
 static int cmd_md(char **arg)
 {
@@ -136,6 +179,47 @@ static int cmd_md(char **arg)
 		offset += blen;
 		length -= blen;
 	}
+
+	return 0;
+}
+
+static int cmd_mw(char **arg)
+{
+	char *off_text = get_arg(arg);
+	char *byte_text;
+	int offset = 0;
+	int length = 0;
+	u_int8_t buf[1024];
+
+	if (!off_text) {
+		fprintf(stderr, "md: offset must be specified\n");
+		return -1;
+	}
+
+	if (stab_parse(off_text, &offset) < 0) {
+		fprintf(stderr, "md: can't parse offset: %s\n", off_text);
+		return -1;
+	}
+
+	while ((byte_text = get_arg(arg))) {
+		if (length >= sizeof(buf)) {
+			fprintf(stderr, "md: maximum length exceeded\n");
+			return -1;
+		}
+
+		buf[length++] = strtoul(byte_text, NULL, 16);
+	}
+
+	if (!length)
+		return 0;
+
+	if (offset < 0 || (offset + length) > 0x10000) {
+		fprintf(stderr, "md: memory out of range\n");
+		return -1;
+	}
+
+	if (msp430_dev->writemem(offset, buf, length) < 0)
+		return -1;
 
 	return 0;
 }
@@ -229,10 +313,6 @@ static int cmd_dis(char **arg)
 	disassemble(offset, (u_int8_t *)buf, length);
 	return 0;
 }
-
-/************************************************************************
- * Hex dumper
- */
 
 static FILE *hexout_file;
 static u_int16_t hexout_addr;
@@ -349,8 +429,13 @@ static int cmd_hexout(char **arg)
 		off += count;
 	}
 
-	hexout_flush();
-	fclose(hexout_file);
+	if (hexout_flush() < 0)
+		goto fail;
+	if (fclose(hexout_file) < 0) {
+		perror("hexout: error on close");
+		return -1;
+	}
+
 	return 0;
 
 fail:
@@ -385,6 +470,7 @@ static int cmd_run(char **arg)
 {
 	char *bp_text = get_arg(arg);
 	int bp_addr;
+	device_status_t status;
 
 	if (bp_text) {
 		if (stab_parse(bp_text, &bp_addr) < 0) {
@@ -404,11 +490,11 @@ static int cmd_run(char **arg)
 		printf("Running to 0x%04x.", bp_addr);
 	else
 		printf("Running.");
-	printf(" Press Ctrl+C to interrupt...");
-	fflush(stdout);
+	printf(" Press Ctrl+C to interrupt...\n");
 
-	msp430_dev->wait();
-	printf("\n");
+	status = msp430_dev->wait(1);
+	if (status == DEVICE_STATUS_INTR)
+		printf("\n");
 
 	if (msp430_dev->control(DEVICE_CTL_HALT) < 0)
 		return -1;
@@ -469,10 +555,6 @@ static int cmd_step(char **arg)
 
 	return cmd_regs(NULL);
 }
-
-/************************************************************************
- * Flash image programming state machine.
- */
 
 static u_int8_t prog_buf[128];
 static u_int16_t prog_addr;
@@ -545,6 +627,15 @@ static int prog_feed(u_int16_t addr, const u_int8_t *data, int len)
 	return 0;
 }
 
+static int cmd_erase(char **arg)
+{
+	if (msp430_dev->control(DEVICE_CTL_HALT) < 0)
+		return -1;
+
+	printf("Erasing...\n");
+	return msp430_dev->control(DEVICE_CTL_ERASE);
+}
+
 static int cmd_prog(char **arg)
 {
 	FILE *in = fopen(*arg, "r");
@@ -569,13 +660,19 @@ static int cmd_prog(char **arg)
 	} else if (ihex_check(in)) {
 		result = ihex_extract(in, prog_feed);
 	} else {
-		fprintf(stderr, "%s: unknown file type\n", *arg);
+		fprintf(stderr, "prog: %s: unknown file type\n", *arg);
 	}
 
-	if (!result)
-		result = prog_flush();
-
 	fclose(in);
+
+	if (prog_flush() < 0)
+		return -1;
+
+	if (msp430_dev->control(DEVICE_CTL_RESET) < 0) {
+		fprintf(stderr, "prog: failed to reset after programming\n");
+		return -1;
+	}
+
 	return result;
 }
 
@@ -631,61 +728,20 @@ static int cmd_syms(char **arg)
 	return result;
 }
 
-static const struct command all_commands[] = {
-	{"=",		cmd_eval,
-"= <expression>\n"
-"    Evaluate an expression using the symbol table.\n"},
-	{"dis",		cmd_dis,
-"dis <address> [length]\n"
-"    Disassemble a section of memory.\n"},
-	{"help",	cmd_help,
-"help [command]\n"
-"    Without arguments, displays a list of commands. With a command name as\n"
-"    an argument, displays help for that command.\n"},
-	{"hexout",	cmd_hexout,
-"hexout <address> <length> <filename.hex>\n"
-"    Save a region of memory into a HEX file.\n"},
-	{"md",		cmd_md,
-"md <address> [length]\n"
-"    Read the specified number of bytes from memory at the given address,\n"
-"    and display a hexdump.\n"},
-	{"nosyms",	cmd_nosyms,
-"nosyms\n"
-"    Clear the symbol table.\n"},
-	{"prog",	cmd_prog,
-"prog <filename>\n"
-"    Erase the device and flash the data contained in a binary file. This\n"
-"    command also loads symbols from the file, if available.\n"},
-	{"regs",	cmd_regs,
-"regs\n"
-"    Read and display the current register contents.\n"},
-	{"reset",	cmd_reset,
-"reset\n"
-"    Reset (and halt) the CPU.\n"},
-	{"run",		cmd_run,
-"run [breakpoint]\n"
-"    Run the CPU until either a specified breakpoint occurs or the command\n"
-"    is interrupted.\n"},
-	{"set",		cmd_set,
-"set <register> <value>\n"
-"    Change the value of a CPU register.\n"},
-	{"step",	cmd_step,
-"step [count]\n"
-"    Single-step the CPU, and display the register state.\n"},
-	{"syms",	cmd_syms,
-"syms <filename>\n"
-"    Load symbols from the given file.\n"},
-};
-
-const struct command *find_command(const char *name)
+static int cmd_gdb(char **arg)
 {
-	int i;
+	char *port_text = get_arg(arg);
+	int port = 2000;
 
-	for (i = 0; i < ARRAY_LEN(all_commands); i++)
-		if (!strcasecmp(name, all_commands[i].name))
-			return &all_commands[i];
+	if (port_text)
+		port = atoi(port_text);
 
-	return NULL;
+	if (port <= 0 || port > 65535) {
+		fprintf(stderr, "gdb: invalid port: %d\n", port);
+		return -1;
+	}
+
+	return gdb_server(msp430_dev, port);
 }
 
 static int cmd_help(char **arg)
@@ -705,17 +761,19 @@ static int cmd_help(char **arg)
 		int i;
 		int max_len = 0;
 		int rows, cols;
+		int total = 0;
 
-		for (i = 0; i < ARRAY_LEN(all_commands); i++) {
+		for (i = 0; all_commands[i].name; i++) {
 			int len = strlen(all_commands[i].name);
 
 			if (len > max_len)
 				max_len = len;
+			total++;
 		}
 
 		max_len += 2;
 		cols = 72 / max_len;
-		rows = (ARRAY_LEN(all_commands) + cols - 1) / cols;
+		rows = (total + cols - 1) / cols;
 
 		printf("Available commands:\n");
 		for (i = 0; i < rows; i++) {
@@ -726,7 +784,7 @@ static int cmd_help(char **arg)
 				int k = j * rows + i;
 				const struct command *cmd = &all_commands[k];
 
-				if (k >= ARRAY_LEN(all_commands))
+				if (k >= total)
 					break;
 
 				printf("%s", cmd->name);
@@ -744,51 +802,104 @@ static int cmd_help(char **arg)
 	return 0;
 }
 
-static void process_command(char *arg)
+static int cmd_read(char **arg)
 {
-	const char *cmd_text;
+	char *filename = get_arg(arg);
+	FILE *in;
+	char buf[1024];
 
-	cmd_text = get_arg(&arg);
-	if (cmd_text) {
-		const struct command *cmd = find_command(cmd_text);
-
-		if (cmd)
-			cmd->func(&arg);
-		else
-			fprintf(stderr, "unknown command: %s (try \"help\")\n",
-				cmd_text);
+	if (!filename) {
+		fprintf(stderr, "read: filename must be specified\n");
+		return -1;
 	}
-}
 
-static void reader_loop(void)
-{
-	printf("\n");
-	cmd_help(NULL);
-	ctrlc_init();
+	in = fopen(filename, "r");
+	if (!in) {
+		fprintf(stderr, "read: can't open %s: %s\n",
+			filename, strerror(errno));
+		return -1;
+	}
 
-	for (;;) {
-		char buf[128];
-		int len;
+	while (fgets(buf, sizeof(buf), in)) {
+		char *cmd = buf;
 
-		printf("(mspdebug) ");
-		fflush(stdout);
-		if (!fgets(buf, sizeof(buf), stdin)) {
-			if (feof(stdin))
-				break;
-			printf("\n");
+		while (*cmd && isspace(*cmd))
+			cmd++;
+
+		if (*cmd == '#')
 			continue;
+
+		if (process_command(cmd) < 0) {
+			fprintf(stderr, "read: error processing %s\n",
+				filename);
+			fclose(in);
+			return -1;
 		}
-
-		len = strlen(buf);
-		while (len && isspace(buf[len - 1]))
-			len--;
-		buf[len] = 0;
-
-		process_command(buf);
 	}
 
-	printf("\n");
+	fclose(in);
+	return 0;
 }
+
+static const struct command all_commands[] = {
+	{"=",		cmd_eval,
+"= <expression>\n"
+"    Evaluate an expression using the symbol table.\n"},
+	{"dis",		cmd_dis,
+"dis <address> [length]\n"
+"    Disassemble a section of memory.\n"},
+	{"erase",       cmd_erase,
+"erase\n"
+"    Erase the device under test.\n"},
+	{"gdb",         cmd_gdb,
+"gdb [port]\n"
+"    Run a GDB remote stub on the given TCP/IP port.\n"},
+	{"help",	cmd_help,
+"help [command]\n"
+"    Without arguments, displays a list of commands. With a command name as\n"
+"    an argument, displays help for that command.\n"},
+	{"hexout",	cmd_hexout,
+"hexout <address> <length> <filename.hex>\n"
+"    Save a region of memory into a HEX file.\n"},
+	{"md",		cmd_md,
+"md <address> [length]\n"
+"    Read the specified number of bytes from memory at the given address,\n"
+"    and display a hexdump.\n"},
+	{"mw",          cmd_mw,
+"mw <address> bytes ...\n"
+"    Write a sequence of bytes to a memory address. Byte values are\n"
+"    two-digit hexadecimal numbers.\n"},
+	{"nosyms",	cmd_nosyms,
+"nosyms\n"
+"    Clear the symbol table.\n"},
+	{"prog",	cmd_prog,
+"prog <filename>\n"
+"    Erase the device and flash the data contained in a binary file. This\n"
+"    command also loads symbols from the file, if available.\n"},
+	{"read",        cmd_read,
+"read <filename>\n"
+"    Read commands from a file and evaluate them.\n"},
+	{"regs",	cmd_regs,
+"regs\n"
+"    Read and display the current register contents.\n"},
+	{"reset",	cmd_reset,
+"reset\n"
+"    Reset (and halt) the CPU.\n"},
+	{"run",		cmd_run,
+"run [breakpoint]\n"
+"    Run the CPU until either a specified breakpoint occurs or the command\n"
+"    is interrupted.\n"},
+	{"set",		cmd_set,
+"set <register> <value>\n"
+"    Change the value of a CPU register.\n"},
+	{"step",	cmd_step,
+"step [count]\n"
+"    Single-step the CPU, and display the register state.\n"},
+	{"syms",	cmd_syms,
+"syms <filename>\n"
+"    Load symbols from the given file.\n"},
+	{NULL, NULL, NULL}
+};
 
 static void usage(const char *progname)
 {
@@ -818,6 +929,51 @@ static void usage(const char *progname)
 		progname, progname, progname, progname);
 }
 
+#ifndef USE_READLINE
+#define LINE_BUF_SIZE 128
+
+static char *readline(const char *prompt)
+{
+	char *buf = malloc(LINE_BUF_SIZE);
+
+	if (!buf) {
+		perror("readline: can't allocate memory");
+		return NULL;
+	}
+
+	do {
+		printf("(mspdebug) ");
+
+		if (!fgets(buf, LINE_BUF_SIZE, stdin))
+			return buf;
+	} while (!feof(stdin));
+
+	free(buf);
+	return NULL;
+}
+
+#define add_history(x)
+#endif
+
+static void reader_loop(void)
+{
+	printf("\n");
+	cmd_help(NULL);
+
+	for (;;) {
+		char *buf = readline("(mspdebug) ");
+
+		if (!buf)
+			break;
+
+		add_history(buf);
+		process_command(buf);
+		free(buf);
+	}
+
+	printf("\n");
+}
+
 #define MODE_RF2500             0x01
 #define MODE_UIF                0x02
 #define MODE_UIF_BSL            0x04
@@ -835,7 +991,7 @@ int main(int argc, char **argv)
 	int mode = 0;
 
 	puts(
-"MSPDebug version 0.5 - debugging tool for MSP430 MCUs\n"
+"MSPDebug version 0.6 - debugging tool for MSP430 MCUs\n"
 "Copyright (C) 2009, 2010 Daniel Beer <daniel@tortek.co.nz>\n"
 "This is free software; see the source for copying conditions.  There is NO\n"
 "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n");
@@ -891,6 +1047,8 @@ int main(int argc, char **argv)
 			"Try -? for help.\n");
 		return -1;
 	}
+
+	ctrlc_init();
 
 	/* Open a device */
 	if (mode == MODE_SIM) {

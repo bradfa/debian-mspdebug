@@ -602,23 +602,23 @@ static int do_erase(void)
 	return 0;
 }
 
-static int fet_wait(void)
+static device_status_t fet_wait(int blocking)
 {
-	for (;;) {
+	do {
 		/* Without this delay, breakpoints can get lost. */
 		if (usleep(500000) < 0)
-			break;
+			return DEVICE_STATUS_INTR;
 
 		if (xfer(C_STATE, NULL, 0, 1, 0) < 0) {
 			fprintf(stderr, "fet: polling failed\n");
-			return -1;
+			return DEVICE_STATUS_ERROR;
 		}
 
 		if (!(fet_reply.argv[0] & FET_POLL_RUNNING))
-			return 0;
-	}
+			return DEVICE_STATUS_HALTED;
+	} while (blocking);
 
-	return 1;
+	return DEVICE_STATUS_RUNNING;
 }
 
 static int fet_control(device_ctl_t action)
@@ -639,7 +639,7 @@ static int fet_control(device_ctl_t action)
 	case DEVICE_CTL_STEP:
 		if (do_run(FET_RUN_STEP) < 0)
 			return -1;
-		if (fet_wait() < 0)
+		if (fet_wait(1) < 0)
 			return -1;
 		return 0;
 

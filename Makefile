@@ -19,6 +19,14 @@ CC = gcc
 INSTALL = /usr/bin/install
 PREFIX ?= /usr/local
 
+ifdef WITHOUT_READLINE
+READLINE_CFLAGS =
+READLINE_LIBS =
+else
+READLINE_CFLAGS = -DUSE_READLINE
+READLINE_LIBS = -lreadline
+endif
+
 all: mspdebug
 
 clean:
@@ -32,8 +40,8 @@ install: mspdebug mspdebug.man
 .SUFFIXES: .c .o
 
 mspdebug: main.o fet.o rf2500.o dis.o uif.o ihex.o elf32.o stab.o util.o \
-	  bsl.o sim.o symmap.o
-	$(CC) $(CFLAGS) -o $@ $^ -lusb
+	  bsl.o sim.o symmap.o gdb.o
+	$(CC) $(LDFLAGS) -o $@ $^ -lusb $(READLINE_LIBS)
 
 .c.o:
-	$(CC) $(CFLAGS) -O1 -Wall -o $@ -c $*.c
+	$(CC) $(CFLAGS) $(READLINE_CFLAGS) -O1 -Wall -o $@ -c $*.c
