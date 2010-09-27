@@ -31,6 +31,8 @@
 #include "util.h"
 #include "gdb.h"
 
+#define MAX_MEM_XFER    1024
+
 /************************************************************************
  * GDB IO routines
  */
@@ -43,16 +45,10 @@ struct gdb_data {
 	int             head;
 	int             tail;
 
-	char            outbuf[1024];
+	char            outbuf[MAX_MEM_XFER * 2 + 64];
 	int             outlen;
 
 	device_t        device;
-
-	/* The underlying device driver supports only one breakpoint at
-	 * a time. We keep track of whether or not it's in use and report
-	 * an error to gdb if more than one is set.
-	 */
-	int             have_breakpoint;
 };
 
 static void gdb_printf(struct gdb_data *data, const char *fmt, ...)
@@ -287,7 +283,7 @@ static int read_memory(struct gdb_data *data, char *text)
 {
 	char *length_text = strchr(text, ',');
 	int length, addr;
-	uint8_t buf[128];
+	uint8_t buf[MAX_MEM_XFER];
 	int i;
 
 	if (!length_text) {
@@ -321,7 +317,7 @@ static int write_memory(struct gdb_data *data, char *text)
 	char *data_text = strchr(text, ':');
 	char *length_text = strchr(text, ',');
 	int length, addr;
-	uint8_t buf[128];
+	uint8_t buf[MAX_MEM_XFER];
 	int buflen = 0;
 
 	if (!(data_text && length_text)) {
@@ -377,7 +373,7 @@ static int run_final_status(struct gdb_data *data)
 		return gdb_send(data, "E00");
 
 	gdb_packet_start(data);
-	gdb_printf(data, "T00");
+	gdb_printf(data, "T05");
 	for (i = 0; i < 16; i++)
 		gdb_printf(data, "%02x:%02x%02x;", i,
 			   regs[i] & 0xff, regs[i] >> 8);
@@ -473,23 +469,18 @@ static int set_breakpoint(struct gdb_data *data, int enable, char *buf)
 	/* Parse the breakpoint address */
 	addr = strtoul(parts[1], NULL, 16);
 
-	/* Only one breakpoint at a time is allowed */
-	if (enable && data->have_breakpoint) {
-		fprintf(stderr, "gdb: only one breakpoint allowed "
-			"at a time\n");
-		return gdb_send(data, "E00");
-	}
+	if (enable) {
+		if (device_setbrk(data->device, -1, 1, addr) < 0) {
+			fprintf(stderr, "gdb: can't add breakpoint at "
+				"0x%04x\n", addr);
+			return gdb_send(data, "E00");
+		}
 
-	/* Set the breakpoint */
-	if (data->device->breakpoint(data->device, enable, addr) < 0)
-		return gdb_send(data, "E00");
-
-	data->have_breakpoint = enable;
-
-	if (enable)
 		printf("Breakpoint set at 0x%04x\n", addr);
-	else
-		printf("Breakpoint cleared\n");
+	} else {
+		device_setbrk(data->device, -1, 0, addr);
+		printf("Breakpoint cleared at 0x%04x\n", addr);
+	}
 
 	return gdb_send(data, "OK");
 }
@@ -498,7 +489,7 @@ static int process_gdb_command(struct gdb_data *data, char *buf, int len)
 {
 	switch (buf[0]) {
 	case '?': /* Return target halt reason */
-		return gdb_send(data, "T00");
+		return run_final_status(data);
 
 	case 'z':
 	case 'Z':
@@ -535,7 +526,7 @@ static int process_gdb_command(struct gdb_data *data, char *buf, int len)
 static void gdb_reader_loop(struct gdb_data *data)
 {
 	for (;;) {
-		char buf[1024];
+		char buf[MAX_MEM_XFER * 2 + 64];
 		int len = 0;
 		int cksum_calc = 0;
 		int cksum_recv = 0;
@@ -603,6 +594,7 @@ static int gdb_server(device_t device, int port)
 	socklen_t len;
 	int arg;
 	struct gdb_data data;
+	int i;
 
 	sock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
 	if (sock < 0) {
@@ -652,12 +644,11 @@ static int gdb_server(device_t device, int port)
 	data.device = device;
 
 	/* Put the hardware breakpoint setting into a known state. */
-	data.have_breakpoint = 0;
-	device->breakpoint(device, 0, 0);
+	printf("Clearing all breakpoints...\n");
+	for (i = 0; i < device->max_breakpoints; i++)
+		device_setbrk(device, i, 0, 0);
 
 	gdb_reader_loop(&data);
-
-	device->breakpoint(device, 0, 0);
 
 	return data.error ? -1 : 0;
 }

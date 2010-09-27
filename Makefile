@@ -20,11 +20,21 @@ INSTALL = /usr/bin/install
 PREFIX ?= /usr/local
 
 ifdef WITHOUT_READLINE
-READLINE_CFLAGS =
-READLINE_LIBS =
+	READLINE_CFLAGS =
+	READLINE_LIBS =
 else
-READLINE_CFLAGS = -DUSE_READLINE
-READLINE_LIBS = -lreadline
+	READLINE_CFLAGS = -DUSE_READLINE
+	READLINE_LIBS = -lreadline
+endif
+
+# Mac OS X/MacPorts stuff
+UNAME := $(shell sh -c 'uname -s')
+ifeq ($(UNAME),Darwin)
+	MACPORTS_CFLAGS = -I/opt/local/include
+	MACPORTS_LDFLAGS = -L/opt/local/lib
+else
+	MACPORTS_CFLAGS =
+	MACPORTS_LDFLAGS =
 endif
 
 MSPDEBUG_CFLAGS = -O1 -Wall -Wno-char-subscripts -ggdb
@@ -36,18 +46,18 @@ clean:
 	/bin/rm -f mspdebug
 
 install: mspdebug mspdebug.man
-	mkdir -p $(PREFIX)/bin
-	mkdir -p $(PREFIX)/share/man/man1
-	$(INSTALL) -m 0755 -s mspdebug $(PREFIX)/bin/mspdebug
-	$(INSTALL) -m 0644 mspdebug.man $(PREFIX)/share/man/man1/mspdebug.1
+	mkdir -p $(DESTDIR)$(PREFIX)/bin
+	mkdir -p $(DESTDIR)$(PREFIX)/share/man/man1
+	$(INSTALL) -m 0755 -s mspdebug $(DESTDIR)$(PREFIX)/bin/mspdebug
+	$(INSTALL) -m 0644 mspdebug.man $(DESTDIR)$(PREFIX)/share/man/man1/mspdebug.1
 
 .SUFFIXES: .c .o
 
 mspdebug: main.o fet.o rf2500.o dis.o uif.o olimex.o ihex.o elf32.o stab.o \
           util.o bsl.o sim.o symmap.o gdb.o btree.o rtools.o sym.o devcmd.o \
 	  cproc.o vector.o cproc_util.o expr.o fet_error.o binfile.o fet_db.o \
-	  usbutil.o
-	$(CC) $(LDFLAGS) -o $@ $^ -lusb $(READLINE_LIBS)
+	  usbutil.o titext.o srec.o device.o coff.o
+	$(CC) $(LDFLAGS) $(MACPORTS_LDFLAGS) -o $@ $^ -lusb $(READLINE_LIBS)
 
 .c.o:
-	$(CC) $(CFLAGS) $(READLINE_CFLAGS) $(MSPDEBUG_CFLAGS) -o $@ -c $*.c
+	$(CC) $(CFLAGS) $(MACPORTS_CFLAGS) $(READLINE_CFLAGS) $(MSPDEBUG_CFLAGS) -o $@ -c $*.c

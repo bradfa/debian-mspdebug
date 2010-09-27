@@ -40,7 +40,6 @@ struct fet_device {
 	transport_t                     transport;
 	int                             proto_flags;
 	int                             version;
-	int                             have_breakpoint;
 
 	/* Device-specific information */
 	u_int16_t                       code_start;
@@ -475,6 +474,13 @@ static int xfer(struct fet_device *dev,
  * MSP430 high-level control functions
  */
 
+static void show_dev_info(const char *name, const struct fet_device *dev)
+{
+	printf("Device: %s\n", name);
+	printf("Code memory starts at 0x%04x\n", dev->code_start);
+	printf("Number of breakpoints: %d\n", dev->base.max_breakpoints);
+}
+
 static int identify_old(struct fet_device *dev)
 {
 	char idtext[64];
@@ -491,9 +497,9 @@ static int identify_old(struct fet_device *dev)
 	idtext[32] = 0;
 
 	dev->code_start = LE_WORD(dev->fet_reply.data, 0x24);
+	dev->base.max_breakpoints = LE_WORD(dev->fet_reply.data, 0x2a);
 
-	printf("Device: %s\n", idtext);
-	printf("Code memory starts at 0x%04x\n", dev->code_start);
+	show_dev_info(idtext, dev);
 
 	return 0;
 }
@@ -529,9 +535,9 @@ static int identify_new(struct fet_device *dev, const char *force_id)
 	}
 
 	dev->code_start = LE_WORD(r->msg29_data, 0);
+	dev->base.max_breakpoints = LE_WORD(r->msg29_data, 0x14);
 
-	printf("Device: %s\n", r->name);
-	printf("Code memory starts at 0x%04x\n", dev->code_start);
+	show_dev_info(r->name, dev);
 
 	if (xfer(dev, C_IDENT3, r->msg2b_data, r->msg2b_len, 0) < 0)
 		fprintf(stderr, "fet: warning: message C_IDENT3 failed\n");
@@ -612,6 +618,33 @@ static device_status_t fet_poll(device_t dev_base)
 	return DEVICE_STATUS_RUNNING;
 }
 
+static int refresh_bps(struct fet_device *dev)
+{
+	int i;
+	int ret = 0;
+
+	for (i = 0; i < dev->base.max_breakpoints; i++) {
+		struct device_breakpoint *bp = &dev->base.breakpoints[i];
+
+		if (bp->flags & DEVICE_BP_DIRTY) {
+			uint16_t addr = bp->addr;
+
+			if (!(bp->flags & DEVICE_BP_ENABLED))
+				addr = 0;
+
+			if (xfer(dev, C_BREAKPOINT, NULL, 0, 2, i, addr) < 0) {
+				fprintf(stderr, "fet: failed to refresh "
+					"breakpoint #%d\n", i);
+				ret = -1;
+			} else {
+				bp->flags &= ~DEVICE_BP_DIRTY;
+			}
+		}
+	}
+
+	return ret;
+}
+
 static int fet_ctl(device_t dev_base, device_ctl_t action)
 {
 	struct fet_device *dev = (struct fet_device *)dev_base;
@@ -625,8 +658,10 @@ static int fet_ctl(device_t dev_base, device_ctl_t action)
 		break;
 
 	case DEVICE_CTL_RUN:
-		return do_run(dev, dev->have_breakpoint ?
-			      FET_RUN_BREAKPOINT : FET_RUN_FREE);
+		if (refresh_bps(dev) < 0)
+			fprintf(stderr, "warning: fet: failed to refresh "
+				"breakpoints\n");
+		return do_run(dev, FET_RUN_BREAKPOINT);
 
 	case DEVICE_CTL_HALT:
 		if (xfer(dev, C_STATE, NULL, 0, 1, 1) < 0) {
@@ -769,24 +804,6 @@ static int fet_setregs(device_t dev_base, const uint16_t *regs)
 	return 0;
 }
 
-static int fet_breakpoint(device_t dev_base, int enabled, uint16_t addr)
-{
-	struct fet_device *dev = (struct fet_device *)dev_base;
-
-	if (enabled) {
-		dev->have_breakpoint = 1;
-
-		if (xfer(dev, C_BREAKPOINT, NULL, 0, 2, 0, addr) < 0) {
-			fprintf(stderr, "fet: set breakpoint failed\n");
-			return -1;
-		}
-	} else {
-		dev->have_breakpoint = 0;
-	}
-
-	return 0;
-}
-
 static int do_configure(struct fet_device *dev)
 {
 	if (dev->proto_flags & FET_PROTO_SPYBIWIRE) {
@@ -823,26 +840,25 @@ device_t fet_open(transport_t transport, int proto_flags, int vcc_mv,
 		  const char *force_id)
 {
 	struct fet_device *dev = malloc(sizeof(*dev));
+	int i;
 
 	if (!dev) {
 		perror("fet: failed to allocate memory");
 		return NULL;
 	}
 
+	memset(dev, 0, sizeof(*dev));
+
 	dev->base.destroy = fet_destroy;
 	dev->base.readmem = fet_readmem;
 	dev->base.writemem = fet_writemem;
 	dev->base.getregs = fet_getregs;
 	dev->base.setregs = fet_setregs;
-	dev->base.breakpoint = fet_breakpoint;
 	dev->base.ctl = fet_ctl;
 	dev->base.poll = fet_poll;
 
 	dev->transport = transport;
 	dev->proto_flags = proto_flags;
-	dev->have_breakpoint = 0;
-
-	dev->fet_len = 0;
 
 	if (proto_flags & FET_PROTO_OLIMEX) {
 		printf("Resetting Olimex command processor...\n");
@@ -870,18 +886,22 @@ device_t fet_open(transport_t transport, int proto_flags, int vcc_mv,
 		goto fail;
 
 	/* set VCC */
-	if (xfer(dev, C_VCC, NULL, 0, 1, vcc_mv) < 0) {
-		fprintf(stderr, "fet: set VCC failed\n");
-		goto fail;
-	}
-
-	printf("Set Vcc: %d mV\n", vcc_mv);
+	if (xfer(dev, C_VCC, NULL, 0, 1, vcc_mv) < 0)
+		fprintf(stderr, "warning: fet: set VCC failed\n");
+	else
+		printf("Set Vcc: %d mV\n", vcc_mv);
 
 	/* Identify the chip */
 	if (do_identify(dev, force_id) < 0) {
 		fprintf(stderr, "fet: identify failed\n");
 		goto fail;
 	}
+
+	/* Make sure breakpoints get reset on the first run */
+	if (dev->base.max_breakpoints > DEVICE_MAX_BREAKPOINTS)
+		dev->base.max_breakpoints = DEVICE_MAX_BREAKPOINTS;
+	for (i = 0; i < dev->base.max_breakpoints; i++)
+		dev->base.breakpoints[i].flags = DEVICE_BP_DIRTY;
 
 	return (device_t)dev;
 
