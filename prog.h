@@ -16,18 +16,24 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef FET_H_
-#define FET_H_
+#ifndef PROG_H_
+#define PROG_H_
 
-#include "device.h"
-#include "transport.h"
+#define PROG_BUFSIZE    128
 
-/* MSP430 FET protocol implementation. */
-#define FET_PROTO_SPYBIWIRE	0x01
-#define FET_PROTO_RF2500	0x02
-#define FET_PROTO_OLIMEX        0x04
+struct prog_data {
+	uint8_t         buf[PROG_BUFSIZE];
+	address_t       addr;
+	int             len;
+	int		flags;
+	int             have_erased;
+};
 
-device_t fet_open(transport_t transport, int proto_flags, int vcc_mv,
-		  const char *force_id);
+#define PROG_WANT_ERASE        0x01
+
+void prog_init(struct prog_data *data, int flags);
+int prog_feed(struct prog_data *data, address_t addr,
+	      const uint8_t *buffer, int count);
+int prog_flush(struct prog_data *data);
 
 #endif

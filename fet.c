@@ -34,6 +34,7 @@
 #include "output.h"
 
 #define MAX_PARAMS		16
+#define BLOCK_SIZE              64
 
 struct fet_device {
 	struct device                   base;
@@ -43,7 +44,7 @@ struct fet_device {
 	int                             version;
 
 	/* Device-specific information */
-	uint16_t                        code_start;
+	address_t			code_start;
 
 	uint8_t                         fet_buf[65538];
 	int                             fet_len;
@@ -574,12 +575,11 @@ static int do_run(struct fet_device *dev, int type)
 	return 0;
 }
 
-static int do_erase(struct fet_device *dev)
+static int fet_erase(device_t dev_base, device_erase_type_t type,
+		     address_t addr)
 {
-	if (xfer(dev, C_RESET, NULL, 0, 3, FET_RESET_ALL, 0, 0) < 0) {
-		printc_err("fet: reset before erase failed\n");
-		return -1;
-	}
+	struct fet_device *dev = (struct fet_device *)dev_base;
+	int fet_erase_type = FET_ERASE_MAIN;
 
 	if (xfer(dev, C_CONFIGURE, NULL, 0, 2, FET_CONFIG_CLKCTRL, 0x26) < 0) {
 		printc_err("fet: config (1) failed\n");
@@ -591,8 +591,27 @@ static int do_erase(struct fet_device *dev)
 		return -1;
 	}
 
-	if (xfer(dev, C_ERASE, NULL, 0, 3, FET_ERASE_MAIN,
-		 dev->code_start, 0) < 0) {
+	switch (type) {
+	case DEVICE_ERASE_MAIN:
+		fet_erase_type = FET_ERASE_MAIN;
+		addr = dev->code_start;
+		break;
+
+	case DEVICE_ERASE_SEGMENT:
+		fet_erase_type = FET_ERASE_SEGMENT;
+		break;
+
+	case DEVICE_ERASE_ALL:
+		fet_erase_type = FET_ERASE_ALL;
+		addr = dev->code_start;
+		break;
+
+	default:
+		printc_err("fet: unsupported erase type\n");
+		return -1;
+	}
+
+	if (xfer(dev, C_ERASE, NULL, 0, 3, fet_erase_type, addr, 0) < 0) {
 		printc_err("fet: erase command failed\n");
 		return -1;
 	}
@@ -685,9 +704,6 @@ static int fet_ctl(device_t dev_base, device_ctl_t action)
 				break;
 		}
 		break;
-
-	case DEVICE_CTL_ERASE:
-		return do_erase(dev);
 	}
 
 	return 0;
@@ -697,8 +713,8 @@ static void fet_destroy(device_t dev_base)
 {
 	struct fet_device *dev = (struct fet_device *)dev_base;
 
-	if (xfer(dev, C_RUN, NULL, 0, 2, FET_RUN_FREE, 1) < 0)
-		printc_err("fet: failed to restart CPU\n");
+	if (xfer(dev, C_RESET, NULL, 0, 3, FET_RESET_ALL, 1, 1) < 0)
+		printc_err("fet: final reset failed\n");
 
 	if (xfer(dev, C_CLOSE, NULL, 0, 1, 0) < 0)
 		printc_err("fet: close command failed\n");
@@ -707,13 +723,58 @@ static void fet_destroy(device_t dev_base)
 	free(dev);
 }
 
+static int read_byte(struct fet_device *dev, address_t addr, uint8_t *out)
+{
+	address_t base = addr & ~1;
+
+	if (xfer(dev, C_READMEMORY, NULL, 0, 2, base, 2) < 0) {
+		printc_err("fet: failed to read byte from 0x%04x\n", addr);
+		return -1;
+	}
+
+	*out = dev->fet_reply.data[addr & 1];
+	return 0;
+}
+
+static int write_byte(struct fet_device *dev, address_t addr, uint8_t value)
+{
+	uint8_t buf[2];
+	address_t base = addr & ~1;
+
+	if (xfer(dev, C_READMEMORY, NULL, 0, 2, base, 2) < 0) {
+		printc_err("fet: failed to read byte from 0x%04x\n", addr);
+		return -1;
+	}
+
+	buf[0] = dev->fet_reply.data[0];
+	buf[1] = dev->fet_reply.data[1];
+	buf[addr & 1] = value;
+
+	if (xfer(dev, C_WRITEMEMORY, buf, 2, 1, base) < 0) {
+		printc_err("fet: failed to write byte from 0x%04x\n", addr);
+		return -1;
+	}
+
+	return 0;
+}
+
 int fet_readmem(device_t dev_base, address_t addr, uint8_t *buffer,
 		address_t count)
 {
 	struct fet_device *dev = (struct fet_device *)dev_base;
 
-	while (count) {
-		int plen = count > 128 ? 128 : count;
+	if (addr & 1) {
+		if (read_byte(dev, addr, buffer) < 0)
+			return -1;
+		addr++;
+		buffer++;
+		count--;
+	}
+
+	while (count > 1) {
+		int plen = count > BLOCK_SIZE ? BLOCK_SIZE : count;
+
+		plen &= ~0x1;
 
 		if (xfer(dev, C_READMEMORY, NULL, 0, 2, addr, plen) < 0) {
 			printc_err("fet: failed to read "
@@ -733,6 +794,9 @@ int fet_readmem(device_t dev_base, address_t addr, uint8_t *buffer,
 		addr += plen;
 	}
 
+	if (count && read_byte(dev, addr, buffer) < 0)
+		return -1;
+
 	return 0;
 }
 
@@ -741,9 +805,19 @@ int fet_writemem(device_t dev_base, address_t addr,
 {
 	struct fet_device *dev = (struct fet_device *)dev_base;
 
-	while (count) {
-		int plen = count > 128 ? 128 : count;
+	if (addr & 1) {
+		if (write_byte(dev, addr, *buffer) < 0)
+			return -1;
+		addr++;
+		buffer++;
+		count--;
+	}
+
+	while (count > 1) {
+		int plen = count > BLOCK_SIZE ? BLOCK_SIZE : count;
 		int ret;
+
+		plen &= ~0x1;
 
 		ret = xfer(dev, C_WRITEMEMORY, buffer, plen, 1, addr);
 
@@ -757,6 +831,9 @@ int fet_writemem(device_t dev_base, address_t addr,
 		count -= plen;
 		addr += plen;
 	}
+
+	if (count && write_byte(dev, addr, *buffer) < 0)
+		return -1;
 
 	return 0;
 }
@@ -859,6 +936,7 @@ device_t fet_open(transport_t transport, int proto_flags, int vcc_mv,
 	dev->base.setregs = fet_setregs;
 	dev->base.ctl = fet_ctl;
 	dev->base.poll = fet_poll;
+	dev->base.erase = fet_erase;
 
 	dev->transport = transport;
 	dev->proto_flags = proto_flags;
@@ -887,13 +965,6 @@ device_t fet_open(transport_t transport, int proto_flags, int vcc_mv,
 
 	if (do_configure(dev) < 0)
 		goto fail;
-
-	/* Reset first, if requested */
-	if (!(proto_flags & FET_PROTO_NORESET)) {
-		printc_dbg("Sending initial reset...\n");
-		if (xfer(dev, C_RESET, NULL, 0, 3, FET_RESET_ALL, 0, 0) < 0)
-			printc_err("warning: fet: initial reset failed\n");
-	}
 
 	/* set VCC */
 	if (xfer(dev, C_VCC, NULL, 0, 1, vcc_mv) < 0)

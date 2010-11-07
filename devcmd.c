@@ -29,6 +29,7 @@
 #include "reader.h"
 #include "output_util.h"
 #include "util.h"
+#include "prog.h"
 #include "dis.h"
 
 int cmd_regs(char **arg)
@@ -77,6 +78,8 @@ int cmd_md(char **arg)
 	} else if (offset + length > 0x10000) {
 		length = 0x10000 - offset;
 	}
+
+	reader_set_repeat("md 0x%x 0x%x", offset + length, length);
 
 	while (length) {
 		uint8_t buf[128];
@@ -137,27 +140,58 @@ int cmd_reset(char **arg)
 
 int cmd_erase(char **arg)
 {
+	const char *type_text = get_arg(arg);
+	const char *seg_text = get_arg(arg);
+	device_erase_type_t type = DEVICE_ERASE_MAIN;
+	address_t segment = 0;
+
+	if (seg_text && expr_eval(stab_default, seg_text, &segment) < 0) {
+		printc_err("erase: invalid expression: %s\n", seg_text);
+		return -1;
+	}
+
+	if (type_text) {
+		if (!strcasecmp(type_text, "all")) {
+			type = DEVICE_ERASE_ALL;
+		} else if (!strcasecmp(type_text, "segment")) {
+			type = DEVICE_ERASE_SEGMENT;
+			if (!seg_text) {
+				printc_err("erase: expected segment "
+					   "address\n");
+				return -1;
+			}
+		} else {
+			printc_err("erase: unknown erase type: %s\n",
+				    type_text);
+			return -1;
+		}
+	}
+
 	if (device_default->ctl(device_default, DEVICE_CTL_HALT) < 0)
 		return -1;
 
 	printc("Erasing...\n");
-	return device_default->ctl(device_default, DEVICE_CTL_ERASE);
+	return device_default->erase(device_default, type, segment);
 }
 
 int cmd_step(char **arg)
 {
 	char *count_text = get_arg(arg);
-	int count = 1;
+	address_t count = 1;
+	int i;
 
-	if (count_text)
-		count = atoi(count_text);
-
-	while (count > 0) {
-		if (device_default->ctl(device_default, DEVICE_CTL_STEP) < 0)
+	if (count_text) {
+		if (expr_eval(stab_default, count_text, &count) < 0) {
+			printc_err("step: can't parse count: %s\n", count_text);
 			return -1;
-		count--;
+		}
 	}
 
+	for (i = 0; i < count; i++)
+		if (device_default->ctl(device_default, DEVICE_CTL_STEP) < 0)
+			return -1;
+
+	reader_set_repeat("step");
 	return cmd_regs(NULL);
 }
 
@@ -284,6 +318,7 @@ int cmd_dis(char **arg)
 		return -1;
 	}
 
+	reader_set_repeat("dis 0x%x 0x%x", offset + length, length);
 	disassemble(offset, buf, length);
 	free(buf);
 	return 0;
@@ -450,78 +485,13 @@ fail:
 	return -1;
 }
 
-struct prog_data {
-	uint8_t         buf[128];
-	address_t       addr;
-	int             len;
-	int             have_erased;
-};
-
-static int prog_flush(struct prog_data *prog)
+static int cmd_prog_feed(void *user_data, address_t addr,
+			 const uint8_t *data, int len)
 {
-	while (prog->len) {
-		int wlen = prog->len;
-
-		if (!prog->have_erased) {
-			printc("Erasing...\n");
-			if (device_default->ctl(device_default,
-						DEVICE_CTL_ERASE) < 0)
-				return -1;
-
-			printc("Programming...\n");
-			prog->have_erased = 1;
-		}
-
-		printc_dbg("Writing %3d bytes to %04x...\n", wlen, prog->addr);
-		if (device_default->writemem(device_default, prog->addr,
-					     prog->buf, wlen) < 0)
-		        return -1;
-
-		memmove(prog->buf, prog->buf + wlen, prog->len - wlen);
-		prog->len -= wlen;
-		prog->addr += wlen;
-	}
-
-        return 0;
+	return prog_feed((struct prog_data *)user_data, addr, data, len);
 }
 
-static int prog_feed(void *user_data,
-		     address_t addr, const uint8_t *data, int len)
-{
-	struct prog_data *prog = (struct prog_data *)user_data;
-
-	/* Flush if this section is discontiguous */
-	if (prog->len && prog->addr + prog->len != addr &&
-	    prog_flush(prog) < 0)
-		return -1;
-
-	if (!prog->len)
-		prog->addr = addr;
-
-	/* Add the buffer in piece by piece, flushing when it gets
-	 * full.
-	 */
-	while (len) {
-		int count = sizeof(prog->buf) - prog->len;
-
-		if (count > len)
-			count = len;
-
-		if (!count) {
-			if (prog_flush(prog) < 0)
-				return -1;
-		} else {
-			memcpy(prog->buf + prog->len, data, count);
-			prog->len += count;
-			data += count;
-			len -= count;
-		}
-	}
-
-	return 0;
-}
-
-int cmd_prog(char **arg)
+static int do_cmd_prog(char **arg, int prog_flags)
 {
 	FILE *in;
 	struct prog_data prog;
@@ -540,14 +510,14 @@ int cmd_prog(char **arg)
 		return -1;
 	}
 
-	memset(&prog, 0, sizeof(prog));
+	prog_init(&prog, prog_flags);
 
-	if (binfile_extract(in, prog_feed, &prog) < 0) {
+	if (binfile_extract(in, cmd_prog_feed, &prog) < 0) {
 		fclose(in);
 		return -1;
 	}
 
-	if (binfile_info(in) & BINFILE_HAS_SYMS) {
+	if (prog_flags && (binfile_info(in) & BINFILE_HAS_SYMS)) {
 		stab_clear(stab_default);
 		binfile_syms(in, stab_default);
 	}
@@ -564,6 +534,16 @@ int cmd_prog(char **arg)
 
 	unmark_modified(MODIFY_SYMS);
 	return 0;
+}
+
+int cmd_prog(char **arg)
+{
+	return do_cmd_prog(arg, PROG_WANT_ERASE);
+}
+
+int cmd_load(char **arg)
+{
+	return do_cmd_prog(arg, 0);
 }
 
 int cmd_setbreak(char **arg)
@@ -584,13 +564,15 @@ int cmd_setbreak(char **arg)
 	}
 
 	if (index_text) {
-		index = atoi(index_text);
+		address_t val;
 
-		if (index < 0 || index >= device_default->max_breakpoints) {
-			printc_err("setbreak: invalid breakpoint "
-				"slot: %d\n", index);
+		if (expr_eval(stab_default, index_text, &val) < 0 ||
+		    val >= device_default->max_breakpoints) {
+			printc("setbreak: invalid breakpoint slot: %d\n", val);
 			return -1;
 		}
+
+		index = val;
 	}
 
 	index = device_setbrk(device_default, index, 1, addr);
@@ -610,11 +592,12 @@ int cmd_delbreak(char **arg)
 	int ret = 0;
 
 	if (index_text) {
-		int index = atoi(index_text);
+		address_t index;
 
-		if (index < 0 || index >= device_default->max_breakpoints) {
-			printc_err("delbreak: invalid breakpoint "
-				"slot: %d\n", index);
+		if (expr_eval(stab_default, index_text, &index) < 0 ||
+		    index >= device_default->max_breakpoints) {
+			printc("delbreak: invalid breakpoint slot: %d\n",
+			       index);
 			return -1;
 		}
 
@@ -656,5 +639,61 @@ int cmd_break(char **arg)
 		}
 	}
 
+	return 0;
+}
+
+#define FCTL3		0x012c
+#define FCTL3_LOCKA	0x40
+#define FWKEY		0xa5
+#define FRKEY           0x96
+
+int cmd_locka(char **arg)
+{
+	const char *status = get_arg(arg);
+	int value = 0;
+	uint8_t regval[2];
+
+	if (status) {
+		if (!strcasecmp(status, "set")) {
+			value = FCTL3_LOCKA;
+		} else if (!strcasecmp(status, "clear")) {
+			value = 0;
+		} else {
+			printc_err("locka: unknown action: %s\n", status);
+			return -1;
+		}
+	}
+
+	if (device_default->readmem(device_default, FCTL3, regval, 2) < 0) {
+		printc_err("locka: can't read FCTL3 register\n");
+		return -1;
+	}
+
+	if (regval[1] != FRKEY) {
+		printc_err("warning: locka: read key invalid (got 0x%02x)\n",
+			   regval[1]);
+		return -1;
+	}
+
+	if (status && ((regval[0] & FCTL3_LOCKA) != value)) {
+		printc_dbg("Toggling LOCKA bit\n");
+
+		regval[0] |= FCTL3_LOCKA;
+		regval[1] = FWKEY;
+
+		if (device_default->writemem(device_default, FCTL3,
+					     regval, 2) < 0) {
+			printc_err("locka: can't write FCTL3 register\n");
+			return -1;
+		}
+
+		if (device_default->readmem(device_default, FCTL3,
+					    regval, 2) < 0) {
+			printc_err("locka: can't read FCTL3 register\n");
+			return -1;
+		}
+	}
+
+	printc("LOCKA is %s\n", (regval[0] & FCTL3_LOCKA) ? "set" : "clear");
 	return 0;
 }

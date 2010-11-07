@@ -1,4 +1,4 @@
-.TH mspdebug 1 "9 Sep 2010" "Version 0.11"
+.TH mspdebug 1 "12 Oct 2010" "Version 0.12"
 .SH NAME
 MSPDebug - debugging tool for MSP430 MCUs
 .SH SYNOPSIS
@@ -47,8 +47,9 @@ Specify a particular USB device to connect to. Without this option,
 the first device of the appropriate type is opened.
 .IP "\-n"
 Do not process the startup file (~/.mspdebug).
-.IP "\--no-reset"
-Do not reset the device on startup.
+.IP "\--long-password"
+When using the flash-bsl driver, send a 32-byte BSL password instead
+of the standard 16-byte password.
 .IP "\-\-help"
 Display a brief help message and exit.
 .IP "\-\-fet\-list"
@@ -109,6 +110,18 @@ currently not implemented, for lack of ability to test it. If implemented,
 this would allow firmware updates to FET430UIF devices.
 
 USB connection is not supported for this driver.
+.IP "\fBflash-bsl\fR"
+Connect to the built-in bootloader in MSP430 devices with flash bootloader
+memory. Devices with ROM bootloaders require another driver. Currently,
+this driver must mass-erase the device in order to gain access. Read,
+write, and erase operations are supported.
+
+USB connection is not supported for this driver. Connection is via serial
+port, and bootloader entry is accomplished via the RTS and DTR lines.
+Connect RTS to the device's TEST pin and DTR to the device's RST pin.
+Use an appropriate serial level-shifter to make the connection, if necessary.
+If connecting to a device with non-multiplexed JTAG pins, connect RTS to
+the device's TCK pin via an inverter.
 .SH COMMANDS
 MSPDebug can accept commands either through an interactive prompt, or
 non-interactively when specified on the command line. The supported
@@ -118,6 +131,11 @@ Commands take arguments separated by spaces. Any text string enclosed
 in double-quotation marks is considered to be a single argument, even
 if it contains space characters. Within a quoted string, the usual
 C-style backslash substitutions can be used.
+
+Commands can be specified by giving the first few characters of the
+command name, provided that the prefix is unambiguous. Some commands
+support automatic repeat. For these commands, pressing enter at the
+reader prompt without typing anything will cause repeat execution.
 .IP "\fB=\fR \fIexpression\fR"
 Evaluate an address expression and show both its value, and the result
 when the value is looked up in reverse in the current symbol
@@ -153,9 +171,19 @@ length (64 bytes) is disassembled and shown.
 
 If symbols are available, then all addresses used as operands are
 translated into \fIsymbol\fR+\fIoffset\fR form.
-.IP "\fBerase\fR"
-Erase the device under test. All code memory is erased (but not
-information or boot memory).
+
+This command supports repeat execution. If repeated, it continues to
+disassemble another block of memory following that last printed.
+.IP "\fBerase\fR [\fBall\fR|\fBsegment\fR] [\fIaddress\fR]"
+Erase the device under test. With no arguments, all code memory is erased
+(but not information or boot memory). With the argument "all", a mass
+erase is performed (the results may depend on the state of the LOCKA
+bit in the flash memory controller).
+
+Specify "segment" and a memory address to erase an individual flash
+segment.
+.IP "\fBexit\fR"
+Exit from MSPDebug.
 .IP "\fBgdb\fR [\fIport\fR]"
 Start a GDB remote stub, optionally specifying a TCP port to listen on.
 If no port is given, the default port is 2000.
@@ -246,6 +274,23 @@ Register-indirect mode with auto-increment.
 .IP "\fB#\fR"
 Immediate mode.
 .RE
+.IP "\fBload\fR \fIfilename\fR"
+Program the device under test using the binary file supplied. This
+command is like \fBprog\fR, but it does not load symbols or erase
+the device before programming.
+
+The CPU is reset and halted before and after programming.
+.IP "\fBlocka\fR [\fBset\fR|\fBclear\fR]"
+Show or change the status of the LOCKA bit in the chip's memory
+controller. The LOCKA bit is set on POR and acts as a write-protect bit
+for info segment A. This segment contains factory-configured calibration
+data, and under normal circumstances, should not be changed.
+
+If the LOCKA bit is cleared, erasing the info A segment is possible.
+
+The LOCKA bit also affects the behaviour of the "erase all" command. If
+LOCKA is set (the default), only main memory is erased. If LOCKA is
+cleared, main and information memory are both erased.
 .IP "\fBmd\fR \fIaddress\fR [\fIlength\fR]"
 Read the specified section of device memory and display it as a
 canonical\-style hexdump. Both arguments may be address expressions. If
@@ -256,6 +301,9 @@ The output is split into three columns. The first column shows the
 starting address for the line. The second column lists the hexadecimal
 values of the bytes. The final column shows the ASCII characters
 corresponding to printable bytes, and . for non-printing characters.
+
+This command supports repeat execution. If repeated, it continues to
+print another block of memory following that last printed.
 .IP "\fBmw\fR \fIaddress\fR \fIbytes\fR ..."
 Write a sequence of bytes at the given memory address. The address given
 may be an address expression. Bytes values are two-digit hexadecimal
@@ -275,12 +323,12 @@ With just an option name as its argument, it displays the current value
 of that option.
 .IP "\fBprog\fR \fIfilename\fR"
 Erase and reprogram the device under test using the binary file
-supplied. The file format will be auto-detected and may be either
-Intel HEX or ELF32.
+supplied. The file format will be auto-detected and may be any of
+the supported file formats.
 
-In the case of an ELF32 file, symbols will be automatically loaded
-from the file into the symbol table (discarding any existing symbols),
-if they are present.
+In the case of a file containing symbols, symbols will be automatically
+loaded from the file into the symbol table (discarding any existing
+symbols), if they are present.
 
 The CPU is reset and halted before and after programming.
 .IP "\fBread\fR \fIfilename\fR"
@@ -317,7 +365,8 @@ register values are displayed, as well as a disassembly of the
 instructions at the address selected by the program counter.
 
 An optional count can be specified to step multiple times. If no
-argument is given, the CPU steps once.
+argument is given, the CPU steps once. This command supports repeat
+execution.
 .IP "\fBsym clear\fR"
 Clear the symbol table, deleting all symbols.
 .IP "\fBsym set\fR \fIname\fR \fIvalue\fR"
@@ -354,8 +403,10 @@ Any command which accepts a memory address, length or register value
 as an argument may be given an address expression. An address
 expression consists of an algebraic combination of values.
 
-An address value may be either a decimal value, a hexadecimal value
-preceeded by the prefix \fB0x\fR, or a symbol name.
+An address value may be either a symbol name, a hex value preceeded
+with the specifier "0x", a decimal value preceeded with the specifier
+"0d", or a number in the default input radix (without a specifier). See
+the option \fBiradix\fR for more information.
 
 The operators recognised are the usual algebraic operators: \fB+\fR, \fB-\fR,
 \fB*\fR, \fB/\fR, \fB%\fR, \fB(\fR and \fB)\fR. Operator precedence is the
@@ -381,6 +432,10 @@ If true, MSPDebug will colorize debugging output.
 Automatically restart the GDB server after disconnection. If this
 option is set, then the GDB server keeps running until an error occurs,
 or the user interrupts with Ctrl+C.
+.IP "\fBiradix\fR (numeric)"
+Default input radix for address expressions. For address values with
+no radix specifier, this value gives the input radix, which is
+10 (decimal) by default.
 .IP "\fBquiet\fR (boolean)"
 If set, MSPDebug will supress most of its debug-related output. This option
 defaults to false, but can be set true on start-up using the \fB-q\fR

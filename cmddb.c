@@ -90,6 +90,14 @@ const struct cmddb_record commands[] = {
 "    This command also loads symbols from the file, if available.\n"
 	},
 	{
+		.name = "load",
+		.func = cmd_load,
+		.help =
+"load <filename>\n"
+"    Flash the data contained in a binary file. Does not load symbols\n"
+"    or erase the device.\n"
+	},
+	{
 		.name = "md",
 		.func = cmd_md,
 		.help =
@@ -116,8 +124,10 @@ const struct cmddb_record commands[] = {
 		.name = "erase",
 		.func = cmd_erase,
 		.help =
-"erase\n"
-"    Erase the device under test.\n"
+"erase [all|segment] [address]\n"
+"    Erase the device under test. With no arguments, erases all of main\n"
+"    memory. Specify arguments to perform a mass erase, or to erase\n"
+"    individual segments.\n"
 	},
 	{
 		.name = "step",
@@ -216,23 +226,56 @@ const struct cmddb_record commands[] = {
 "cgraph <address> <length> [function]\n"
 "    Analyse the range given and produce a call graph. Displays a summary\n"
 "    of all functions if no function address is given.\n"
+	},
+	{
+		.name = "locka",
+		.func = cmd_locka,
+		.help =
+"locka [set|clear]\n"
+"    Show or change the status of the LOCKA flash write-protect bit.\n"
+	},
+	{
+		.name = "exit",
+		.func = cmd_exit,
+		.help =
+"exit\n"
+"    Exit from MSPDebug.\n"
 	}
 };
 
 int cmddb_get(const char *name, struct cmddb_record *ret)
 {
+	int len = strlen(name);
 	int i;
+	const struct cmddb_record *found = NULL;
 
+	/* First look for an exact match */
 	for (i = 0; i < ARRAY_LEN(commands); i++) {
 		const struct cmddb_record *r = &commands[i];
 
 		if (!strcasecmp(r->name, name)) {
-			memcpy(ret, r, sizeof(*ret));
-			return 0;
+			found = r;
+			goto done;
 		}
 	}
 
-	return -1;
+	/* Allow partial matches if unambiguous */
+	for (i = 0; i < ARRAY_LEN(commands); i++) {
+		const struct cmddb_record *r = &commands[i];
+
+		if (!strncasecmp(r->name, name, len)) {
+			if (found)
+				return -1;
+			found = r;
+		}
+	}
+
+	if (!found)
+		return -1;
+
+done:
+	memcpy(ret, found, sizeof(*ret));
+	return 0;
 }
 
 int cmddb_enum(cmddb_enum_func_t func, void *user_data)
