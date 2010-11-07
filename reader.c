@@ -36,8 +36,12 @@
 #include "reader.h"
 #include "opdb.h"
 
+#define MAX_READER_LINE		1024
+
 static int modify_flags;
 static int in_reader_loop;
+static int want_exit;
+static char repeat_buf[MAX_READER_LINE];
 
 void mark_modified(int flags)
 {
@@ -57,7 +61,7 @@ int prompt_abort(int flags)
                 return 0;
 
         for (;;) {
-                printc("Symbols have not been saved since modification. "
+                printf("Symbols have not been saved since modification. "
                        "Continue (y/n)? ");
                 fflush(stdout);
 
@@ -141,6 +145,20 @@ static int do_command(char *arg, int interactive)
 	return 0;
 }
 
+void reader_exit(void)
+{
+	want_exit = 1;
+}
+
+void reader_set_repeat(const char *fmt, ...)
+{
+	va_list ap;
+
+	va_start(ap, fmt);
+	vsnprintf(repeat_buf, sizeof(repeat_buf), fmt, ap);
+	va_end(ap);
+}
+
 void reader_loop(void)
 {
 	int old = in_reader_loop;
@@ -154,19 +172,37 @@ void reader_loop(void)
 	}
 
 	do {
+		want_exit = 0;
+
 		for (;;) {
 			char *buf = readline("(mspdebug) ");
+			char tmpbuf[MAX_READER_LINE];
 
-			if (!buf)
+			if (!buf) {
+				printc("\n");
 				break;
+			}
 
-			add_history(buf);
-			do_command(buf, 1);
+			/* Copy into our local buffer and free */
+			strncpy(tmpbuf, buf, sizeof(tmpbuf));
+			tmpbuf[sizeof(tmpbuf) - 1] = 0;
 			free(buf);
+			buf = tmpbuf;
+
+			if (*buf) {
+				add_history(buf);
+				repeat_buf[0] = 0;
+			} else {
+				memcpy(tmpbuf, repeat_buf, sizeof(tmpbuf));
+			}
+
+			do_command(buf, 1);
+
+			if (want_exit)
+				break;
 		}
 	} while (prompt_abort(MODIFY_SYMS));
 
-	printc("\n");
 	in_reader_loop = old;
 }
 
@@ -175,7 +211,7 @@ int process_command(char *cmd)
 	return do_command(cmd, 0);
 }
 
-int process_file(const char *filename)
+int process_file(const char *filename, int show)
 {
 	FILE *in;
 	char buf[1024];
@@ -198,6 +234,9 @@ int process_file(const char *filename)
 
 		if (*cmd == '#')
 			continue;
+
+		if (show)
+			printc("\x1b[1m=>\x1b[0m %s", cmd);
 
 		if (do_command(cmd, 0) < 0) {
 			printc_err("read: error processing %s (line %d)\n",

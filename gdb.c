@@ -33,6 +33,7 @@
 #include "gdb.h"
 #include "output.h"
 #include "reader.h"
+#include "expr.h"
 
 #define MAX_MEM_XFER    8192
 
@@ -321,7 +322,7 @@ static int read_memory(struct gdb_data *data, char *text)
 	if (length > sizeof(buf))
 		length = sizeof(buf);
 
-	printc("Reading %d bytes from 0x%04x\n", length, addr);
+	printc("Reading %3d bytes from 0x%04x\n", length, addr);
 
 	if (device_default->readmem(device_default, addr, buf, length) < 0)
 		return gdb_send(data, "E00");
@@ -364,7 +365,7 @@ static int write_memory(struct gdb_data *data, char *text)
 		return gdb_send(data, "E00");
 	}
 
-	printc("Writing %d bytes to 0x%04x\n", buflen, addr);
+	printc("Writing %3d bytes to 0x%04x\n", length, addr);
 
 	if (device_default->writemem(device_default, addr, buf, buflen) < 0)
 		return gdb_send(data, "E00");
@@ -698,10 +699,12 @@ static int gdb_server(int port)
 int cmd_gdb(char **arg)
 {
 	char *port_text = get_arg(arg);
-	int port = 2000;
+	address_t port = 2000;
 
-	if (port_text)
-		port = atoi(port_text);
+	if (port_text && expr_eval(stab_default, port_text, &port) < 0) {
+		printc_err("gdb: can't parse port: %s\n", port_text);
+		return -1;
+	}
 
 	if (port <= 0 || port > 65535) {
 		printc_err("gdb: invalid port: %d\n", port);

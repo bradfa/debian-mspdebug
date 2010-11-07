@@ -44,6 +44,7 @@
 #include "fet.h"
 #include "vector.h"
 #include "fet_db.h"
+#include "flash_bsl.h"
 
 #include "uif.h"
 #include "olimex.h"
@@ -124,9 +125,9 @@ struct cmdline_args {
 	const char      *usb_device;
 	const char      *fet_force_id;
 	int             want_jtag;
-	int		no_reset;
 	int             no_rc;
 	int             vcc_mv;
+	int		long_password;
 };
 
 struct driver {
@@ -142,8 +143,6 @@ static device_t driver_open_fet(const struct cmdline_args *args,
 
 	if (!args->want_jtag)
 		flags |= FET_PROTO_SPYBIWIRE;
-	if (args->no_reset)
-		flags |= FET_PROTO_NORESET;
 
 	dev = fet_open(trans, flags, args->vcc_mv, args->fet_force_id);
 	if (!dev) {
@@ -218,6 +217,17 @@ static device_t driver_open_uif_bsl(const struct cmdline_args *args)
 	return bsl_open(args->serial_device);
 }
 
+static device_t driver_open_flash_bsl(const struct cmdline_args *args)
+{
+	if (!args->serial_device) {
+		printc_err("This driver does not support USB access. "
+			   "Specify a tty device using -d.\n");
+		return NULL;
+	}
+
+	return flash_bsl_open(args->serial_device, args->long_password);
+}
+
 static const struct driver driver_table[] = {
 	{
 		.name = "rf2500",
@@ -243,13 +253,18 @@ static const struct driver driver_table[] = {
 		.name = "uif-bsl",
 		.help = "TI FET430UIF bootloader.",
 		.func = driver_open_uif_bsl
+	},
+	{
+		.name = "flash-bsl",
+		.help = "TI generic flash-based bootloader via RS-232",
+		.func = driver_open_flash_bsl
 	}
 };
 
 static void version(void)
 {
 	printc(
-"MSPDebug version 0.11 - debugging tool for MSP430 MCUs\n"
+"MSPDebug version 0.12 - debugging tool for MSP430 MCUs\n"
 "Copyright (C) 2009, 2010 Daniel Beer <daniel@tortek.co.nz>\n"
 "This is free software; see the source for copying conditions.  There is NO\n"
 "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR "
@@ -274,8 +289,8 @@ static void usage(const char *progname)
 "        Set the supply voltage, in millivolts.\n"
 "    -n\n"
 "        Do not read ~/.mspdebug on startup.\n"
-"    --no-reset\n"
-"        Do not reset the device on startup.\n"
+"    --long-password\n"
+"        Send 32-byte IVT as BSL password (flash-bsl only)\n"
 "    --help\n"
 "        Show this help text.\n"
 "    --fet-list\n"
@@ -312,7 +327,7 @@ static void process_rc_file(void)
 
 	snprintf(text, sizeof(text), "%s/.mspdebug", home);
 	if (!access(text, F_OK))
-		process_file(text);
+		process_file(text, 0);
 }
 
 static int add_fet_device(void *user_data, const struct fet_db_record *r)
@@ -322,15 +337,9 @@ static int add_fet_device(void *user_data, const struct fet_db_record *r)
 	return vector_push(v, &r->name, 1);
 }
 
-static int cmp_char_ptr(const void *a, const void *b)
-{
-	return strcmp(*(const char **)a, *(const char **)b);
-}
-
 static int list_devices(void)
 {
 	struct vector v;
-	int i;
 
 	vector_init(&v, sizeof(const char *));
 	if (fet_db_enum(add_fet_device, &v) < 0) {
@@ -339,13 +348,10 @@ static int list_devices(void)
 		return -1;
 	}
 
-	qsort(v.ptr, v.size, v.elemsize, cmp_char_ptr);
-
 	printc("Devices supported by FET driver:\n");
-	for (i = 0; i < v.size; i++)
-		printc("    %s\n", VECTOR_AT(v, i, const char *));
-
+	namelist_print(&v);
 	vector_destroy(&v);
+
 	return 0;
 }
 
@@ -359,7 +365,7 @@ static int parse_cmdline_args(int argc, char **argv,
 		{"fet-force-id",        1, 0, 'F'},
 		{"usb-list",            0, 0, 'I'},
 		{"version",             0, 0, 'V'},
-		{"no-reset",            0, 0, 'R'},
+		{"long-password",       0, 0, 'P'},
 		{NULL, 0, 0, 0}
 	};
 
@@ -418,8 +424,8 @@ static int parse_cmdline_args(int argc, char **argv,
 			args->no_rc = 1;
 			break;
 
-		case 'R':
-			args->no_reset = 1;
+		case 'P':
+			args->long_password = 1;
 			break;
 
 		case '?':
