@@ -1,0 +1,47 @@
+This work was packaged for Debian by:
+
+    Luca Bruno <lucab@debian.org> on Mon, 27 Sep 2010 12:26:51 +0200
+
+It was downloaded from:
+
+    http://mspdebug.sourceforge.net/
+
+Upstream Authors:
+
+    Daniel Beer <daniel@tortek.co.nz>
+    Doug Forman <doug.dougforman@gmail.com>
+    Robert Kavaler <kavaler@diva.com>
+    Hans Nieuwenhuis <vzzbx@xs4all.nl>
+    Peter Jansen <pwjansen@yahoo.com>
+    Aurélien Gauducheau <aurelien.gauducheau@gmail.com>
+    Andres Vahter <andres.vahter@gmail.com>
+    Robert Spanton <rspanton@zepler.net>
+    Stephen Kench <stephen@pmssystems.com>
+
+Copyright:
+
+    Copyright 2009, 2010 Daniel Beer
+    Copyright 2010 Peter Jansen
+
+License:
+
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+
+The Debian packaging is:
+
+    Copyright (C) 2010 Luca Bruno <lucab@debian.org>
+
+and is licensed under the same terms of the original mspdebug.
+For the complete text of GPLv2, see "/usr/share/common-licenses/GPL-2".

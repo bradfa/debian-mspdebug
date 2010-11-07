@@ -1,0 +1,18 @@
+Source: mspdebug
+Section: electronics
+Priority: extra
+Maintainer: Luca Bruno <lucab@debian.org>
+Build-Depends: debhelper (>= 7.0.50~), libusb-dev, libreadline-dev
+Standards-Version: 3.9.1
+Homepage: http://mspdebug.sourceforge.net/
+Vcs-Git: git://git.debian.org/collab-maint/mspdebug.git
+Vcs-Browser: http://git.debian.org/?p=collab-maint/mspdebug.git;a=summary
+
+Package: mspdebug
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: debugging tool for MSP430 microcontrollers
+ MSPDebug is a free debugger for use with MSP430 MCUs. It supports FET430UIF,
+ eZ430, RF2500 and Olimex MSP-JTAG-TINY programmers. It can be used as a proxy
+ for gdb or as an independent debugger with support for programming, disassembly
+ and reverse engineering.
