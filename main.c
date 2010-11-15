@@ -174,10 +174,27 @@ static device_t driver_open_olimex(const struct cmdline_args *args)
 	transport_t trans;
 
 	if (args->serial_device)
-		trans = uif_open(args->serial_device, 1);
+		trans = uif_open(args->serial_device, UIF_TYPE_OLIMEX);
 	else
 		trans = olimex_open(args->usb_device);
 
+	if (!trans)
+		return NULL;
+
+	return driver_open_fet(args, FET_PROTO_OLIMEX, trans);
+}
+
+static device_t driver_open_olimex_iso(const struct cmdline_args *args)
+{
+	transport_t trans;
+
+	if (!args->serial_device) {
+		printc_err("This driver does not support USB access. "
+			   "Specify a tty device using -d.\n");
+		return NULL;
+	}
+
+	trans = uif_open(args->serial_device, UIF_TYPE_OLIMEX_ISO);
 	if (!trans)
 		return NULL;
 
@@ -199,7 +216,7 @@ static device_t driver_open_uif(const struct cmdline_args *args)
 		return NULL;
 	}
 
-	trans = uif_open(args->serial_device, 0);
+	trans = uif_open(args->serial_device, UIF_TYPE_FET);
 	if (!trans)
 		return NULL;
 
@@ -239,6 +256,10 @@ static const struct driver driver_table[] = {
 		.help = "Olimex MSP-JTAG-TINY.",
 		.func = driver_open_olimex
 	},
+	{       .name = "olimex-iso",
+		.help = "Olimex MSP-JTAG-ISO.",
+		.func = driver_open_olimex_iso
+	},
 	{
 		.name = "sim",
 		.help = "Simulation mode.",
@@ -261,15 +282,12 @@ static const struct driver driver_table[] = {
 	}
 };
 
-static void version(void)
-{
-	printc(
-"MSPDebug version 0.12 - debugging tool for MSP430 MCUs\n"
+static const char *version_text =
+"MSPDebug version 0.13 - debugging tool for MSP430 MCUs\n"
 "Copyright (C) 2009, 2010 Daniel Beer <daniel@tortek.co.nz>\n"
 "This is free software; see the source for copying conditions.  There is NO\n"
 "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR "
-"PURPOSE.\n");
-}
+"PURPOSE.\n";
 
 static void usage(const char *progname)
 {
@@ -409,7 +427,7 @@ static int parse_cmdline_args(int argc, char **argv,
 			exit(0);
 
 		case 'V':
-			version();
+			printc("%s", version_text);
 			exit(0);
 
 		case 'v':
@@ -489,6 +507,7 @@ int main(int argc, char **argv)
 	if (parse_cmdline_args(argc, argv, &args) < 0)
 		return -1;
 
+	printc_dbg("%s\n", version_text);
 	if (setup_driver(&args) < 0)
 		return -1;
 
