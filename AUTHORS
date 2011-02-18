@@ -1,4 +1,4 @@
-MSPDebug is mostly written by Daniel Beer <daniel@tortek.co.nz>. Other
+MSPDebug is mostly written by Daniel Beer <dlbeer@gmail.com>. Other
 people who have made significant contributions are listed here.
 
 Doug Forman <doug.dougforman@gmail.com>:
@@ -42,6 +42,9 @@ Andrew Armenia <andrew@asquaredlabs.com>:
 James Laird <james.laird@nicta.com.au>:
 	* Support for CC430F5133.
 
-Stefan Mahr <Stefan.Mahr@phairon.com>:
+Stefan Mahr <Stefan.Mahr@sphairon.com>:
 	* Initial support, testing and analysis for Olimex
 	  MSP430-JTAG-ISO.
+
+Jasper Lievisse Adriaanse <jasper@openbsd.org>:
+	* Ported to OpenBSD.

@@ -25,7 +25,10 @@
 #include <unistd.h>
 #include <termios.h>
 
+#if defined(__linux__)
 #include <linux/serial.h>
+#endif
+
 #include <sys/ioctl.h>
 #include <fcntl.h>
 
@@ -33,7 +36,7 @@
 #include "util.h"
 #include "output.h"
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__OpenBSD__)
 #define B460800 460800
 #define B500000 500000
 #endif
@@ -85,6 +88,7 @@ static void serial_destroy(transport_t tr_base)
 	free(tr);
 }
 
+#if defined(__linux__)
 static int open_olimex_iso(const char *device)
 {
         int fd = open(device, O_RDWR | O_NOCTTY);
@@ -112,6 +116,14 @@ static int open_olimex_iso(const char *device)
 
         return fd;
 }
+#else
+static int open_olimex_iso(const char *device)
+{
+	printc_err("open_olimex_iso: this driver is only supported on "
+		   "Linux\n");
+	return -1;
+}
+#endif
 
 transport_t uif_open(const char *device, uif_type_t type)
 {
