@@ -1,3 +1,10 @@
+mspdebug (0.14-1) unstable; urgency=low
+
+  * New upstream version
+    + Bug fixes and new chips support
+
+ -- Luca Bruno <lucab@debian.org>  Fri, 18 Feb 2011 10:47:31 +0100
+
 mspdebug (0.13-1) unstable; urgency=low
 
   * New upstream version
