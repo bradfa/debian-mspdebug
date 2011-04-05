@@ -16,7 +16,7 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
 
-CC ?= gcc
+CC = gcc
 INSTALL = /usr/bin/install
 PREFIX ?= /usr/local
 LDFLAGS ?= -s
@@ -36,7 +36,7 @@ ifeq ($(UNAME),Darwin) # Mac OS X/MacPorts stuff
 else
   ifeq ($(UNAME),OpenBSD) # OpenBSD Ports stuff
 	PORTS_CFLAGS = `pkg-config --cflags libelf libusb`
-	PORTS_LDFLAGS = `pkg-config --libs libelf libusb`
+	PORTS_LDFLAGS = `pkg-config --libs libelf libusb` -ltermcap
   else
 	PORTS_CFLAGS =
 	PORTS_LDFLAGS =
@@ -63,7 +63,8 @@ mspdebug: main.o fet.o rf2500.o dis.o uif.o olimex.o ihex.o elf32.o stab.o \
           util.o bsl.o sim.o symmap.o gdb.o btree.o rtools.o sym.o devcmd.o \
 	  reader.o vector.o output_util.o expr.o fet_error.o binfile.o \
 	  fet_db.o usbutil.o titext.o srec.o device.o coff.o opdb.o output.o \
-	  cmddb.o stdcmd.o prog.o flash_bsl.o
+	  cmddb.o stdcmd.o prog.o flash_bsl.o list.o simio.o simio_tracer.o \
+	  simio_timer.o simio_wdt.o simio_hwmult.o simio_gpio.o aliasdb.o
 	$(CC) $(LDFLAGS) $(PORTS_LDFLAGS) -o $@ $^ -lusb $(READLINE_LIBS)
 
 .c.o:

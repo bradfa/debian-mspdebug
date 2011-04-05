@@ -25,8 +25,6 @@
 struct device;
 typedef struct device *device_t;
 
-extern device_t device_default;
-
 typedef enum {
 	DEVICE_CTL_RESET,
 	DEVICE_CTL_RUN,
@@ -58,14 +56,24 @@ struct device_breakpoint {
 	int            flags;
 };
 
-struct device {
-	/* Breakpoint table. This should not be modified directly.
-	 * Instead, you should use the device_setbrk() helper function. This
-	 * will set the appropriate flags and ensure that the breakpoint is
-	 * reloaded before the next run.
-	 */
-	int max_breakpoints;
-	struct device_breakpoint breakpoints[DEVICE_MAX_BREAKPOINTS];
+#define DEVICE_FLAG_JTAG	0x01 /* default is SBW */
+#define DEVICE_FLAG_LONG_PW	0x02
+#define DEVICE_FLAG_TTY		0x04 /* default is USB */
+#define DEVICE_FLAG_FORCE_RESET	0x08
+
+struct device_args {
+	int			flags;
+	int			vcc_mv;
+	const char		*path;
+	const char		*forced_chip_id;
+};
+
+struct device_class {
+	const char		*name;
+	const char		*help;
+
+	/* Create a new device */
+	device_t (*open)(const struct device_args *args);
 
 	/* Close the connection to the device and destroy the driver object */
 	void (*destroy)(device_t dev);
@@ -91,6 +99,18 @@ struct device {
 	device_status_t (*poll)(device_t dev);
 };
 
+struct device {
+	const struct device_class	*type;
+
+	/* Breakpoint table. This should not be modified directly.
+	 * Instead, you should use the device_setbrk() helper function. This
+	 * will set the appropriate flags and ensure that the breakpoint is
+	 * reloaded before the next run.
+	 */
+	int max_breakpoints;
+	struct device_breakpoint breakpoints[DEVICE_MAX_BREAKPOINTS];
+};
+
 /* Set or clear a breakpoint. The index of the modified entry is
  * returned, or -1 if no free entries were available. The modified
  * entry is flagged so that it will be reloaded on the next run.
@@ -100,5 +120,24 @@ struct device {
  * automatically.
  */
 int device_setbrk(device_t dev, int which, int enabled, address_t address);
+
+extern device_t device_default;
+
+/* Helper macros for operating on the default device */
+#define device_destroy() device_default->type->destroy(device_default)
+#define device_readmem(addr, mem, len) \
+	device_default->type->readmem(device_default, addr, mem, len)
+#define device_writemem(addr, mem, len) \
+	device_default->type->writemem(device_default, addr, mem, len)
+#define device_erase(et, addr) \
+	device_default->type->erase(device_default, et, addr)
+#define device_getregs(regs) \
+	device_default->type->getregs(device_default, regs)
+#define device_setregs(regs) \
+	device_default->type->setregs(device_default, regs)
+#define device_ctl(op) \
+	device_default->type->ctl(device_default, op)
+#define device_poll() \
+	device_default->type->poll(device_default)
 
 #endif

@@ -1,4 +1,4 @@
-.TH mspdebug 1 "7 Feb 2011" "Version 0.14"
+.TH mspdebug 1 "5 Apr 2011" "Version 0.15"
 .SH NAME
 MSPDebug - debugging tool for MSP430 MCUs
 .SH SYNOPSIS
@@ -16,8 +16,8 @@ which can be used to reflash the device memory, inspect memory and
 registers, set registers, and control the CPU (single step, run and
 run to breakpoint).
 
-It supports ELF32, Intel HEX and BSD-style symbol tables (such as the
-output produced by \fBnm\fR(1)). It can also be used as a remote stub
+It supports a variety of file formats, described in the section
+\fBBINARY FORMATS\fR below. It can also be used as a remote stub
 for \fBgdb\fR(1).
 
 On startup, MSPDebug will look for a file called .mspdebug in the user's
@@ -53,14 +53,17 @@ of the standard 16-byte password.
 .IP "\-\-help"
 Display a brief help message and exit.
 .IP "\-\-fet\-list"
-Display a list of devices supported by the FET driver (the driver used
-for \fB\-R\fR and \fB\-u\fR operating modes).
+Display a list of chips supported by the FET driver (the driver used
+for UIF, RF2500 and Olimex devices)>
 .IP "\-\-fet\-force\-id \fIstring\fR"
 When using a FET device, force the connected chip to be recognised by
 MSPDebug as one of the given type during initialization. This overrides
 the device ID returned by the FET.
 .IP "\-\-usb\-list"
 List available USB devices and exit.
+.IP "\-\-force-reset"
+When using a FET device, always send a reset during initialization. By
+default, an initialization without reset will be tried first.
 .IP "\-\-version"
 Show program version and copyright information.
 .SH DRIVERS
@@ -75,20 +78,12 @@ supported.
 Connect to an Olimex MSP-JTAG-ISO device. Only tty access is supported.
 .IP "\fBsim\fR"
 Do not connect to any hardware device, but instead start in simulation
-mode. A 64k buffer is allocated to simulate the device memory. The CPU
-core alone is emulated (no peripheral emulation).
+mode. A 64k buffer is allocated to simulate the device memory.
 
 During simulation, addresses below 0x0200 are assumed to be IO memory.
-When data is written to an IO memory address, a message is displayed
-on the console showing the program counter location, address written
-to, and data. The data value is also written to simulated RAM at the
-relevant address.
-
-When data is read from IO memory, the user is notified similarly and
-prompted to supply the data. At this prompt, address expressions can
-be entered. If no value is entered, the value is read from simulated
-RAM. The user can press Ctrl+C to abort an IO request and stop
-execution.
+Programmed IO writes to and from IO memory are handled by the IO
+simulator, which can be configured and controlled with the \fBsimio\fR
+command, described below.
 
 This mode is intended for testing of changes to MSPDebug, and for
 aiding the disassembly of MSP430 binaries (as all binary and symbol
@@ -106,10 +101,8 @@ MSP430F419 chips. By sending a special command sequence, you can obtain
 access to the bootloader and inspect memory on the MSP430F419 in the
 programming device itself.
 
-Currently, only memory inspection is supported. CPU control via the
-bootloader is not possible. Memory erase and write is possible, but is
-currently not implemented, for lack of ability to test it. If implemented,
-this would allow firmware updates to FET430UIF devices.
+Currently, only memory read/write and erase are supported. CPU control
+via the bootloader is not possible.
 
 USB connection is not supported for this driver.
 .IP "\fBflash-bsl\fR"
@@ -147,6 +140,16 @@ question.
 
 See the section marked \fBADDRESS EXPRESSIONS\fR for more information on
 the syntax of expressions.
+.IP "\fBalias\fR"
+Show a list of defined command aliases.
+.IP "\fBalias\fR \fIname\fR"
+Remove a previously defined command alias.
+.IP "\fBalias\fR \fIname\fR \fIcommand\fR"
+Define a command alias. The text \fIcommand\fR will be substituted for
+\fIname\fR when looking up commands. The given command text may contain
+a command plus arguments, if the entire text is wrapped in quotes when
+defining the alias. To avoid alias substitution when interpreting
+commands, prefix the command with \\ (a backslash character).
 .IP "\fBbreak\fR"
 Show a list of active breakpoints. Breakpoints can be added and removed
 with the \fBsetbreak\fR and \fBdelbreak\fR commands. Each breakpoint is
@@ -255,6 +258,7 @@ Match instructions using the specified mode in the destination operand. See
 below for a list of modes. This option implies that no-argument instructions
 are not matched.
 .RE
+.IP
 For single-operand instructions, the operand is considered to be the
 destination operand.
 
@@ -361,6 +365,38 @@ Add a new breakpoint. The breakpoint location is an address expression. An
 optional index may be specified, indicating that this new breakpoint should
 overwrite an existing slot. If no index is specified, then the breakpoint
 will be stored in the next unused slot.
+.IP "\fBsimio add\fR \fIclass\fR \fIname\fR [\fIargs ...\fR]"
+Add a new peripheral to the IO simulator. The \fIclass\fR parameter may be
+any of the peripheral types named in the output of the \fBsimio classes\fR
+command. The \fIname\fR parameter is a unique name assigned by the user to
+this peripheral instance, and is used with other commands to refer to this
+instance of the peripheral.
+
+Some peripheral classes take arguments upon creation. These are documented
+in the output to the \fBsimio help\fR command.
+.IP "\fBsimio classes\fR"
+List the names of the different types of peripherals which may be added to
+the simulator. You can use the \fBsimio help\fR command to obtain more
+information about each peripheral type.
+.IP "\fBsimio config\fR \fIname\fR \fIparam\fR [\fIargs ...\fR]"
+Configure or perform some action on a peripheral instance. The \fIparam\fR
+argument is specific to the peripheral type. A list of valid configuration
+commands can be obtained by using the \fBsimio help\fR command.
+.IP "\fBsimio del\fR \fIname\fR"
+Remove a previously added peripheral instance. The \fIname\fR argument
+should be the name of the peripheral that was assigned with the
+\fBsimio add\fR command.
+.IP "\fBsimio devices\fR"
+List all peripheral instances currently attached to the simulator, along
+with their types and interrupt status. You can obtain more detailed
+information for each instance with the \fBsimio info\fR command.
+.IP "\fBsimio help\fR \fIclass\fR"
+Obtain more information about a peripheral class. The documentation
+given will list constructor arguments and configuration parameters for
+the device type.
+.IP "\fBsimio info\fR \fIname\fR"
+Display detailed status information for a particular peripheral. The type
+of information displayed is specific to each type of peripheral.
 .IP "\fBstep\fR [\fIcount\fR]"
 Step the CPU through one or more instructions. After stepping, the new
 register values are displayed, as well as a disassembly of the
@@ -400,6 +436,142 @@ Rename symbols by searching for those matching the given regular
 expression and substituting the given string for the matched portion. The
 symbols renamed are displayed, as well as a total count of all symbols
 renamed.
+.SH BINARY FORMATS
+The following binary/symbol formats are supported by MSPDebug:
+
+.RS
+ELF32
+.br
+COFF
+.br
+Intel HEX (program only)
+.br
+BSD symbol table (symbols only)
+.br
+TI Text (program only)
+.br
+SREC (program only)
+.RE
+.SH IO SIMULATOR
+The IO simulator subsystem consists of a database of device classes, and a
+list of instances of those classes. Each device class has a different
+set of constructor arguments, configuration parameters and information which
+may be displayed. This section describes the operation of the available
+device classes in detail.
+
+In the list below, each device class is listed, followed by its constructor
+arguments.
+.IP "\fBgpio\fR"
+Digital IO port simulator. This device simulates any of the digital ports
+with or without interrupt capability. It has the following configuration
+parameters:
+.RS
+.IP "\fBbase\fR \fIaddress\fR"
+Set the base address for this port. Note that for ports without interrupt
+capability, the resistor enable port has a special address which is
+computable from the base address.
+.IP "\fBirq\fR \fIvector\fR"
+Enable interrupt functionality for this port by specifying an interrupt
+vector number.
+.IP "\fBnoirq\fR"
+Disable interrupt functionality for this port.
+.IP "\fBverbose\fR"
+Print a state change message every time the port output changes.
+.IP "\fBquiet\fR"
+Don't print anything when the port state changes (the default).
+.IP "\fBset\fR \fIpin\fR \fIvalue\fR"
+Set the input pin state for the given pin on this port. The \fIpin\fR
+parameter should be an index between 0 and 7. The \fIvalue\fR should be
+either zero (for a low state) or non-zero (for a high state).
+.RE
+.IP "\fBhwmult\fR"
+This peripheral simulates the hardware multiplier. It has no constructor or
+configuration parameters, and does not provide any extended information.
+.IP "\fBtimer\fR [\fIsize\fR]"
+This peripheral simulators Timer_A modules, and can be used to simulate
+Timer_B modules, provided that the extended features aren't required.
+
+The constructor takes a size argument specifying the number of capture/compare
+registers in this peripheral instance. The number of such registers may not
+be less than 2, or greater than 7.
+
+The IO addresses and IRQs used are configurable. The default IO addresses used
+are those specified for Timer_A in the MSP430 hardware documentation.
+.RS
+.IP "\fBbase\fR \fIaddress\fR"
+Alter the base IO address. By default, this is 0x0160. By setting this to 0x0180,
+a Timer_B module may be simulated.
+.IP "\fBirq0\fR \fInumber\fR"
+Set the TACCR0 interrupt vector number. By default, this is interrupt vector 9.
+This interrupt is self-clearing, and higher priority than the TACCR1/TAIFG
+vector.
+.IP "\fBirq1\fR \fInumber\fR"
+Set the TACCR1/TAIFG interrupt vector. By default, this is interrupt vector 8.
+.IP "\fBiv\fR \fIaddress\fR"
+Alter the address of the interrupt vector register. By default, this is 0x012E.
+By setting this to 0x011E, a Timer_B module may be simulated.
+.IP "\fBset\fR \fIchannel\fR \fIvalue\fR"
+When Timer_A is used in capture mode, the CCI bit in each capture register reflects
+the state of the corresponding input pin, and can't be altered in software. This
+configuration command can be used to simulate changes in input pin state, and will
+trigger the corresponding interrupts if the peripheral is so configured.
+.RE
+.IP "\fBtracer\fR [\fIhistory-size\fR]"
+The tracer peripheral is a debugging device. It can be used to investigate
+and record the IO activity of a running program, to benchmark execution time,
+and to simulate interrupts.
+
+The information displayed by the tracer gives a running count of clock cycles
+from each of the system clocks, and an instruction count. A list of the \fIN\fR
+most recent IO events is also displayed (this is configurable via the \fIhistory-size\fR
+argument of the constructor). Each IO event is timestamped by the number of
+MCLK cycles that have elapsed since the last reset of the device's counter.
+
+The IO events that it records consist of programmed IO reads and writes,
+interrupt acceptance, and system resets. As well as keeping the IO events in a
+rotating buffer, the tracer can be configured to display the events as they
+occur.
+
+Note that since clock cycles don't advance while the CPU isn't running, this
+peripheral can be used to calculate execution times for blocks of code. This
+can be achieved by setting a breakpoint at the end of the code block, setting the
+program counter to the start of the code block, clearing the tracer and running
+the code. After the breakpoint is reached, the information displayed by the
+tracer will contain a count of MCLK cycles elapsed during the last run.
+
+The configuration parameters for this device class are:
+.RS
+.IP "\fBverbose\fR"
+Start displaying IO events as they occur, as well as recording them in the
+rotating buffer.
+.IP "\fBquiet\fR"
+Stop displaying IO events as they occur, and just record them in the buffer.
+.IP "\fBtrigger\fR \fIirq\fR"
+Signal an interrupt request to the CPU. This request will remain raised until
+accepted by the CPU or cleared by the user.
+.IP "\fBuntrigger\fR"
+Clear a signalled interrupt request.
+.IP "\fBclear\fR"
+Reset the clock cycle and instruction counts to 0, and clear the IO event
+history.
+.RE
+.IP "\fBwdt\fR"
+This peripheral simulates the Watchdog Timer+, which can be used in software
+either as a watchdog or as an interval timer. It has no constructor arguments.
+
+The simulated state of the NMI/RST# pin can be controlled through a configuration
+parameter. Note that if this pin state is held low with the pin mode selected
+as a reset (the default), the CPU will not run.
+
+The extended information for this peripheral shows all register states, including
+the hidden counter register. Configuration parameters are:
+.RS
+.IP "\fBnmi\fR \fIstate\fR"
+Set the NMI/RST# pin state. The argument should be zero to indicate a low state
+or non-zero for a high state.
+.IP "\fBirq\fR \fIirq\fR"
+Select the interrupt vector for interval timer mode. The default is to use
+interrupt vector 10.
 .SH ADDRESS EXPRESSIONS
 Any command which accepts a memory address, length or register value
 as an argument may be given an address expression. An address
@@ -424,12 +596,14 @@ The following are all valid examples of address expressions:
 .B main+0x3f
 .br
 .B __bss_end-__bss_start
-.SH SEE ALSO
-\fBnm\fR(1), \fBgdb\fR(1), \fBobjcopy\fR(1)
 .SH OPTIONS
 MSPDebug's behaviour can be configured via the following variables:
 .IP "\fBcolor\fR (boolean)"
 If true, MSPDebug will colorize debugging output.
+.IP "\fBfet_block_size\fR (numeric)"
+Change the size of the buffer used to transfer memory to and from the
+FET. Increasing the value from the default of 64 will improve transfer
+speed, but may cause problems with some chips.
 .IP "\fBgdb_loop\fR (boolean)"
 Automatically restart the GDB server after disconnection. If this
 option is set, then the GDB server keeps running until an error occurs,
@@ -442,16 +616,13 @@ no radix specifier, this value gives the input radix, which is
 If set, MSPDebug will supress most of its debug-related output. This option
 defaults to false, but can be set true on start-up using the \fB-q\fR
 command-line option.
+.SH SEE ALSO
+\fBnm\fR(1), \fBgdb\fR(1), \fBobjcopy\fR(1)
 .SH BUGS
 If you find any bugs, you should report them to the author at
 dlbeer@gmail.com. It would help if you could include a transcript
 of an MSPDebug session illustrating the program, as well as any
-relevant binaries or other files. Below, known bugs in the current
-version of MSPDebug are described.
-
-When using the GDB remote stub in simulation and an IO read request
-occurs, any request to interrupt from GDB will not be acknowledged
-until the IO request is either completed or aborted.
+relevant binaries or other files.
 .SH COPYRIGHT
 Copyright (C) 2009-2011 Daniel Beer <dlbeer@gmail.com>
 

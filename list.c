@@ -16,25 +16,29 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef OUTPUT_UTIL_H_
-#define OUTPUT_UTIL_H_
+#include <stdlib.h>
+#include "list.h"
 
-#include "output.h"
-#include "util.h"
+void list_init(struct list_node *head)
+{
+	head->next = head;
+	head->prev = head;
+}
 
-/* Print colorized disassembly on command processor standard output */
-void disassemble(address_t addr, const uint8_t *buf, int len);
+void list_insert(struct list_node *item, struct list_node *after)
+{
+	item->next = after;
+	item->prev = after->prev;
 
-/* Print colorized hexdump on standard output */
-void hexdump(address_t addr, const uint8_t *buf, int len);
+	after->prev->next = item;
+	after->prev = item;
+}
 
-/* Colorized register dump */
-void show_regs(const address_t *regs);
+void list_remove(struct list_node *item)
+{
+	item->next->prev = item->prev;
+	item->prev->next = item->next;
 
-/* Given an address, format it either as sym+0x0offset or just 0x0offset.
- *
- * Returns non-zero if the result is of the form sym+0x0offset.
- */
-int print_address(address_t addr, char *buf, int max_len);
-
-#endif
+	item->prev = NULL;
+	item->next = NULL;
+}

@@ -154,7 +154,7 @@ static int isearch_addr(const char *term, char **arg,
 		return -1;
 	}
 
-	if (expr_eval(stab_default, addr_text, &addr) < 0)
+	if (expr_eval(addr_text, &addr) < 0)
 		return -1;
 
 	q->flags |= which;
@@ -353,7 +353,7 @@ static int do_isearch(address_t addr, address_t len,
 		return -1;
 	}
 
-	if (device_default->readmem(device_default, addr, mbuf, len) < 0) {
+	if (device_readmem(addr, mbuf, len) < 0) {
 		printc_err("isearch: couldn't read device memory\n");
 		free(mbuf);
 		return -1;
@@ -409,8 +409,8 @@ int cmd_isearch(char **arg)
 		return -1;
 	}
 
-	if (expr_eval(stab_default, addr_text, &addr) < 0 ||
-	    expr_eval(stab_default, len_text, &len) < 0)
+	if (expr_eval(addr_text, &addr) < 0 ||
+	    expr_eval(len_text, &len) < 0)
 		return -1;
 
 	q.flags = 0;
@@ -755,7 +755,7 @@ static int cgraph_init(address_t offset, address_t len, uint8_t *memory,
 	if (add_irq_edges(offset, len, memory, graph) < 0)
 		goto fail;
 
-	if (stab_enum(stab_default, add_symbol_nodes, graph) < 0)
+	if (stab_enum(add_symbol_nodes, graph) < 0)
 		goto fail;
 	if (add_nodes_from_edges(graph) < 0)
 		goto fail;
@@ -785,7 +785,6 @@ static void cgraph_summary(struct call_graph *graph)
 		int from_count = 0;
 		int to_count = 0;
 		char name[64];
-		address_t o;
 
 		while (j < graph->edge_from.size &&
 		       CG_EDGE_FROM(graph, j)->src < n->offset)
@@ -807,11 +806,7 @@ static void cgraph_summary(struct call_graph *graph)
 			k++;
 		}
 
-		if (stab_nearest(stab_default, n->offset,
-				 name, sizeof(name), &o) ||
-		    o)
-			name[0] = 0;
-
+		print_address(n->offset, name, sizeof(name));
 		printc("0x%04x [%3d ==> %3d] %s\n",
 		       n->offset, to_count, from_count, name);
 	}
@@ -823,7 +818,6 @@ static void cgraph_func_info(struct call_graph *graph, address_t addr)
 	int j = 0;
 	int k = 0;
 	char name[64];
-	address_t offset;
 	struct cg_node *n;
 
 	while (i + 1 < graph->node_list.size &&
@@ -845,13 +839,8 @@ static void cgraph_func_info(struct call_graph *graph, address_t addr)
 	       CG_EDGE_TO(graph, k)->dst < n->offset)
 		k++;
 
-	if (stab_nearest(stab_default, n->offset,
-			 name, sizeof(name), &offset))
-		printc("0x%04x:\n", n->offset);
-	else if (offset)
-		printc("0x%04x %s+0x%x:\n", n->offset, name, offset);
-	else
-		printc("0x%04x %s:\n", n->offset, name);
+	print_address(n->offset, name, sizeof(name));
+	printc("0x%04x %s:\n", n->offset, name);
 
 	if (j < graph->edge_from.size &&
 	    CG_EDGE_FROM(graph, j)->src == n->offset) {
@@ -862,11 +851,7 @@ static void cgraph_func_info(struct call_graph *graph, address_t addr)
 			if (e->src != n->offset)
 				break;
 
-			if (stab_nearest(stab_default, e->dst,
-					 name, sizeof(name),
-					 &offset) ||
-			    offset)
-				snprintf(name, sizeof(name), "0x%04x", e->dst);
+			print_address(e->dst, name, sizeof(name));
 			printc("        %s%s\n",
 			       e->is_tail_call ? "*" : "", name);
 
@@ -884,11 +869,7 @@ static void cgraph_func_info(struct call_graph *graph, address_t addr)
 			if (e->dst != n->offset)
 				break;
 
-			if (stab_nearest(stab_default, e->src,
-					 name, sizeof(name),
-					 &offset) ||
-			    offset)
-				snprintf(name, sizeof(name), "0x%04x", e->src);
+			print_address(e->src, name, sizeof(name));
 			printc("        %s%s\n",
 			       e->is_tail_call ? "*" : "", name);
 
@@ -915,19 +896,19 @@ int cmd_cgraph(char **arg)
 		return -1;
 	}
 
-	if (expr_eval(stab_default, offset_text, &offset) < 0) {
+	if (expr_eval(offset_text, &offset) < 0) {
 		printc_err("cgraph: invalid offset: %s\n", offset_text);
 		return -1;
 	}
 	offset &= ~1;
 
-	if (expr_eval(stab_default, len_text, &len) < 0) {
+	if (expr_eval(len_text, &len) < 0) {
 		printc_err("cgraph: invalid length: %s\n", len_text);
 		return -1;
 	}
 	len &= ~1;
 
-	if (addr_text && expr_eval(stab_default, addr_text, &addr) < 0) {
+	if (addr_text && expr_eval(addr_text, &addr) < 0) {
 		printc_err("cgraph: invalid address: %s\n", addr_text);
 		return -1;
 	}
@@ -940,7 +921,7 @@ int cmd_cgraph(char **arg)
 		return -1;
 	}
 
-	if (device_default->readmem(device_default, offset, memory, len) < 0) {
+	if (device_readmem(offset, memory, len) < 0) {
 		printc_err("cgraph: couldn't fetch memory\n");
 		free(memory);
 		return -1;

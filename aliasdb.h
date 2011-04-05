@@ -16,25 +16,14 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef OUTPUT_UTIL_H_
-#define OUTPUT_UTIL_H_
+#ifndef ALIASDB_H_
+#define ALIASDB_H_
 
-#include "output.h"
-#include "util.h"
+/* "alias" command */
+int cmd_alias(char **arg);
 
-/* Print colorized disassembly on command processor standard output */
-void disassemble(address_t addr, const uint8_t *buf, int len);
-
-/* Print colorized hexdump on standard output */
-void hexdump(address_t addr, const uint8_t *buf, int len);
-
-/* Colorized register dump */
-void show_regs(const address_t *regs);
-
-/* Given an address, format it either as sym+0x0offset or just 0x0offset.
- *
- * Returns non-zero if the result is of the form sym+0x0offset.
- */
-int print_address(address_t addr, char *buf, int max_len);
+/* Translate a command using the aliases table. */
+int translate_alias(const char *command, const char *args,
+		    char *out_cmd, int max_len);
 
 #endif

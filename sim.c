@@ -25,16 +25,13 @@
 #include "util.h"
 #include "output.h"
 #include "sim.h"
+#include "simio_cpu.h"
 
 #define MEM_SIZE	65536
 #define MEM_IO_END      0x200
 
 struct sim_device {
 	struct device           base;
-
-	sim_fetch_func_t        fetch_func;
-	sim_store_func_t        store_func;
-	void                    *user_data;
 
 	uint8_t                 memory[MEM_SIZE];
 	uint16_t                regs[DEVICE_NUM_REGS];
@@ -123,14 +120,21 @@ static int fetch_operand(struct sim_device *dev,
 	if (data_ret) {
 		*data_ret = MEM_GETW(dev, addr) & mask;
 
-		if (addr < MEM_IO_END && dev->fetch_func) {
-			uint16_t data16 = *data_ret;
+		if (addr < MEM_IO_END) {
 			int ret;
 
-			ret = dev->fetch_func(dev->user_data,
-					      dev->current_insn,
-					      addr, is_byte, &data16);
-			*data_ret = data16;
+			if (is_byte) {
+				uint8_t x = *data_ret;
+
+				ret = simio_read_b(addr, &x);
+				*data_ret = x;
+			} else {
+				uint16_t x = *data_ret;
+
+				ret = simio_read(addr, &x);
+				*data_ret = x;
+			}
+
 			return ret;
 		}
 	}
@@ -138,9 +142,9 @@ static int fetch_operand(struct sim_device *dev,
 	return 0;
 }
 
-static void store_operand(struct sim_device *dev,
-			  int amode, int reg, int is_byte,
-			  uint16_t addr, uint16_t data)
+static int store_operand(struct sim_device *dev,
+			 int amode, int reg, int is_byte,
+			 uint16_t addr, uint16_t data)
 {
 	if (is_byte)
 		MEM_SETB(dev, addr, data);
@@ -149,9 +153,14 @@ static void store_operand(struct sim_device *dev,
 
 	if (amode == MSP430_AMODE_REGISTER)
 		dev->regs[reg] = data;
-	else if (addr < MEM_IO_END && dev->store_func)
-		dev->store_func(dev->user_data, dev->current_insn,
-				addr, is_byte, data);
+	else if (addr < MEM_IO_END) {
+		if (is_byte)
+			return simio_write_b(addr, data);
+
+		return simio_write(addr, data);
+	}
+
+	return 0;
 }
 
 #define ARITH_BITS (MSP430_SR_V | MSP430_SR_N | MSP430_SR_Z | MSP430_SR_C)
@@ -170,6 +179,26 @@ static int step_double(struct sim_device *dev, uint16_t ins)
 	uint32_t res_data;
 	uint32_t msb = is_byte ? 0x80 : 0x8000;
 	uint32_t mask = is_byte ? 0xff : 0xffff;
+	int cycles;
+
+	if (amode_dst == MSP430_AMODE_REGISTER && dreg == MSP430_REG_PC) {
+		if (amode_src == MSP430_AMODE_REGISTER ||
+		    amode_src == MSP430_AMODE_INDIRECT)
+			cycles = 2;
+		else
+			cycles = 3;
+	} else {
+		if (amode_src == MSP430_AMODE_INDIRECT ||
+		    amode_src == MSP430_AMODE_INDIRECT_INC)
+			cycles = 2;
+		else if (amode_src == MSP430_AMODE_INDEXED)
+			cycles = 3;
+		else
+			cycles = 1;
+
+		if (amode_dst == MSP430_AMODE_INDEXED)
+			cycles += 3;
+	}
 
 	if (fetch_operand(dev, amode_src, sreg, is_byte, NULL, &src_data) < 0)
 		return -1;
@@ -263,11 +292,12 @@ static int step_double(struct sim_device *dev, uint16_t ins)
 		return -1;
 	}
 
-	if (opcode != MSP430_OP_CMP && opcode != MSP430_OP_BIT)
+	if (opcode != MSP430_OP_CMP && opcode != MSP430_OP_BIT &&
 		store_operand(dev, amode_dst, dreg, is_byte,
-			      dst_addr, res_data);
+			      dst_addr, res_data) < 0)
+		return -1;
 
-	return 0;
+	return cycles;
 }
 
 static int step_single(struct sim_device *dev, uint16_t ins)
@@ -281,9 +311,17 @@ static int step_single(struct sim_device *dev, uint16_t ins)
 	uint16_t src_addr = 0;
 	uint32_t src_data;
 	uint32_t res_data = 0;
+	int cycles = 1;
 
 	if (fetch_operand(dev, amode, reg, is_byte, &src_addr, &src_data) < 0)
 		return -1;
+
+	if (amode == MSP430_AMODE_INDEXED)
+		cycles = 4;
+	else if (amode == MSP430_AMODE_REGISTER)
+		cycles = 1;
+	else
+		cycles = 5;
 
 	switch (opcode) {
 	case MSP430_OP_RRC:
@@ -325,6 +363,15 @@ static int step_single(struct sim_device *dev, uint16_t ins)
 	case MSP430_OP_PUSH:
 		dev->regs[MSP430_REG_SP] -= 2;
 		MEM_SETW(dev, dev->regs[MSP430_REG_SP], src_data);
+
+		if (amode == MSP430_AMODE_REGISTER)
+			cycles = 3;
+		else if (amode == MSP430_AMODE_INDIRECT ||
+			 (amode == MSP430_AMODE_INDIRECT_INC &&
+			  reg == MSP430_REG_PC))
+			cycles = 4;
+		else
+			cycles = 5;
 		break;
 
 	case MSP430_OP_CALL:
@@ -332,6 +379,12 @@ static int step_single(struct sim_device *dev, uint16_t ins)
 		MEM_SETW(dev, dev->regs[MSP430_REG_SP],
 			 dev->regs[MSP430_REG_PC]);
 		dev->regs[MSP430_REG_PC] = src_data;
+
+		if (amode == MSP430_AMODE_REGISTER ||
+		    amode == MSP430_AMODE_INDIRECT)
+			cycles = 4;
+		else
+			cycles = 5;
 		break;
 
 	case MSP430_OP_RETI:
@@ -341,6 +394,7 @@ static int step_single(struct sim_device *dev, uint16_t ins)
 		dev->regs[MSP430_REG_PC] =
 			MEM_GETW(dev, dev->regs[MSP430_REG_SP]);
 		dev->regs[MSP430_REG_SP] += 2;
+		cycles = 5;
 		break;
 
 	default:
@@ -350,10 +404,11 @@ static int step_single(struct sim_device *dev, uint16_t ins)
 	}
 
 	if (opcode != MSP430_OP_PUSH && opcode != MSP430_OP_CALL &&
-	    opcode != MSP430_OP_RETI)
-		store_operand(dev, amode, reg, is_byte, src_addr, res_data);
+	    opcode != MSP430_OP_RETI &&
+		store_operand(dev, amode, reg, is_byte, src_addr, res_data) < 0)
+		return -1;
 
-	return 0;
+	return cycles;
 }
 
 static int step_jump(struct sim_device *dev, uint16_t ins)
@@ -404,9 +459,12 @@ static int step_jump(struct sim_device *dev, uint16_t ins)
 	if (sr)
 		dev->regs[MSP430_REG_PC] += pc_offset;
 
-	return 0;
+	return 2;
 }
 
+/* Fetch and execute one instruction. Return the number of CPU cycles
+ * it would have taken, or -1 if an error occurs.
+ */
 static int step_cpu(struct sim_device *dev)
 {
 	uint16_t ins;
@@ -432,6 +490,55 @@ static int step_cpu(struct sim_device *dev)
 	return ret;
 }
 
+static void do_reset(struct sim_device *dev)
+{
+	simio_step(dev->regs[MSP430_REG_SR], 4);
+	memset(dev->regs, 0, sizeof(dev->regs));
+	dev->regs[MSP430_REG_PC] = MEM_GETW(dev, 0xfffe);
+	dev->regs[MSP430_REG_SR] = 0;
+	simio_reset();
+}
+
+static int step_system(struct sim_device *dev)
+{
+	int count = 1;
+	int irq;
+	uint16_t status = dev->regs[MSP430_REG_SR];
+
+	irq = simio_check_interrupt();
+	if (irq == 15) {
+		do_reset(dev);
+		return 0;
+	} else if (((status & MSP430_SR_GIE) && irq >= 0) || irq >= 14) {
+		if (irq >= 16) {
+			printc_err("sim: invalid interrupt number: %d\n", irq);
+			return -1;
+		}
+
+		dev->regs[MSP430_REG_SP] -= 2;
+		MEM_SETW(dev, dev->regs[MSP430_REG_SP],
+			 dev->regs[MSP430_REG_PC]);
+
+		dev->regs[MSP430_REG_SP] -= 2;
+		MEM_SETW(dev, dev->regs[MSP430_REG_SP],
+			 dev->regs[MSP430_REG_SR]);
+
+		dev->regs[MSP430_REG_SR] &=
+			~(MSP430_SR_GIE | MSP430_SR_CPUOFF);
+		dev->regs[MSP430_REG_PC] = MEM_GETW(dev, 0xffe0 + irq * 2);
+
+		simio_ack_interrupt(irq);
+		count = 6;
+	} else if (!(status & MSP430_SR_CPUOFF)) {
+		count = step_cpu(dev);
+		if (count < 0)
+			return -1;
+	}
+
+	simio_step(status, count);
+	return 0;
+}
+
 /************************************************************************
  * Device interface
  */
@@ -455,6 +562,26 @@ static int sim_readmem(device_t dev_base, address_t addr,
 	if (addr + len > MEM_SIZE)
 		len = MEM_SIZE - addr;
 
+	/* Read byte IO addresses */
+	while (len && (addr < 0x100)) {
+		simio_read_b(addr, mem);
+		mem++;
+		len--;
+		addr++;
+	}
+
+	/* Read word IO addresses */
+	while (len > 2 && (addr < 0x200)) {
+		uint16_t data = 0;
+
+		simio_read(addr, &data);
+		mem[0] = data & 0xff;
+		mem[1] = data >> 8;
+		mem += 2;
+		len -= 2;
+		addr += 2;
+	}
+
 	memcpy(mem, dev->memory + addr, len);
 	return 0;
 }
@@ -468,6 +595,22 @@ static int sim_writemem(device_t dev_base, address_t addr,
 	    (addr + len) > MEM_SIZE) {
 		printc_err("sim: memory write out of range\n");
 		return -1;
+	}
+
+	/* Write byte IO addresses */
+	while (len && (addr < 0x100)) {
+		simio_write_b(addr, *mem);
+		mem++;
+		len--;
+		addr++;
+	}
+
+	/* Write word IO addresses */
+	while (len > 2 && (addr < 0x200)) {
+		simio_write(addr, ((uint16_t)mem[1] << 8) | mem[0]);
+		mem += 2;
+		len -= 2;
+		addr += 2;
 	}
 
 	memcpy(dev->memory + addr, mem, len);
@@ -500,8 +643,7 @@ static int sim_ctl(device_t dev_base, device_ctl_t op)
 
 	switch (op) {
 	case DEVICE_CTL_RESET:
-		memset(dev->regs, 0, sizeof(dev->regs));
-		dev->regs[MSP430_REG_PC] = MEM_GETW(dev, 0xfffe);
+		do_reset(dev);
 		return 0;
 
 	case DEVICE_CTL_HALT:
@@ -509,7 +651,7 @@ static int sim_ctl(device_t dev_base, device_ctl_t op)
 		return 0;
 
 	case DEVICE_CTL_STEP:
-		return step_cpu(dev);
+		return step_system(dev);
 
 	case DEVICE_CTL_RUN:
 		dev->running = 1;
@@ -566,13 +708,7 @@ static device_status_t sim_poll(device_t dev_base)
 			}
 		}
 
-		if (dev->regs[MSP430_REG_SR] & MSP430_SR_CPUOFF) {
-			printc("CPU disabled\n");
-			dev->running = 0;
-			return DEVICE_STATUS_HALTED;
-		}
-
-		if (step_cpu(dev) < 0) {
+		if (step_system(dev) < 0) {
 			dev->running = 0;
 			return DEVICE_STATUS_ERROR;
 		}
@@ -586,9 +722,7 @@ static device_status_t sim_poll(device_t dev_base)
 	return DEVICE_STATUS_RUNNING;
 }
 
-device_t sim_open(sim_fetch_func_t fetch_func,
-		  sim_store_func_t store_func,
-		  void *user_data)
+static device_t sim_open(const struct device_args *args)
 {
 	struct sim_device *dev = malloc(sizeof(*dev));
 
@@ -599,19 +733,8 @@ device_t sim_open(sim_fetch_func_t fetch_func,
 
 	memset(dev, 0, sizeof(*dev));
 
+	dev->base.type = &device_sim;
 	dev->base.max_breakpoints = DEVICE_MAX_BREAKPOINTS;
-	dev->base.destroy = sim_destroy;
-	dev->base.readmem = sim_readmem;
-	dev->base.writemem = sim_writemem;
-	dev->base.erase = sim_erase;
-	dev->base.getregs = sim_getregs;
-	dev->base.setregs = sim_setregs;
-	dev->base.ctl = sim_ctl;
-	dev->base.poll = sim_poll;
-
-	dev->fetch_func = fetch_func;
-	dev->store_func = store_func;
-	dev->user_data = user_data;
 
 	memset(dev->memory, 0xff, sizeof(dev->memory));
 	memset(dev->regs, 0xff, sizeof(dev->regs));
@@ -622,3 +745,17 @@ device_t sim_open(sim_fetch_func_t fetch_func,
 	printc_dbg("Simulation started, 0x%x bytes of RAM\n", MEM_SIZE);
 	return (device_t)dev;
 }
+
+const struct device_class device_sim = {
+	.name		= "sim",
+	.help		= "Simulation mode.",
+	.open		= sim_open,
+	.destroy	= sim_destroy,
+	.readmem	= sim_readmem,
+	.writemem	= sim_writemem,
+	.erase		= sim_erase,
+	.getregs	= sim_getregs,
+	.setregs	= sim_setregs,
+	.ctl		= sim_ctl,
+	.poll		= sim_poll
+};
