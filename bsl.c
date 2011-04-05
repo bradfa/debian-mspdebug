@@ -361,10 +361,16 @@ static int enter_via_fet(struct bsl_device *dev)
 	return 0;
 }
 
-device_t bsl_open(const char *device)
+static device_t bsl_open(const struct device_args *args)
 {
-	struct bsl_device *dev = malloc(sizeof(*dev));
+	struct bsl_device *dev;
 
+	if (!(args->flags & DEVICE_FLAG_TTY)) {
+		printc_err("This driver does not support raw USB access.\n");
+		return NULL;
+	}
+
+	dev = malloc(sizeof(*dev));
 	if (!dev) {
 		pr_error("bsl: can't allocate memory");
 		return NULL;
@@ -372,19 +378,12 @@ device_t bsl_open(const char *device)
 
 	memset(dev, 0, sizeof(*dev));
 
-	dev->base.destroy = bsl_destroy;
-	dev->base.readmem = bsl_readmem;
-	dev->base.writemem = bsl_writemem;
-	dev->base.erase = bsl_erase;
-	dev->base.getregs = bsl_getregs;
-	dev->base.setregs = bsl_setregs;
-	dev->base.ctl = bsl_ctl;
-	dev->base.poll = bsl_poll;
+	dev->base.type = &device_bsl;
 
-	dev->serial_fd = open_serial(device, B460800);
+	dev->serial_fd = open_serial(args->path, B460800);
 	if (dev->serial_fd < 0) {
 		printc_err("bsl: can't open %s: %s\n",
-			device, strerror(errno));
+			   args->path, strerror(errno));
 		free(dev);
 		return NULL;
 	}
@@ -417,3 +416,17 @@ device_t bsl_open(const char *device)
 	free(dev);
 	return NULL;
 }
+
+const struct device_class device_bsl = {
+	.name		= "uif-bsl",
+	.help		= "TI FET430UIF bootloader.",
+	.open		= bsl_open,
+	.destroy	= bsl_destroy,
+	.readmem	= bsl_readmem,
+	.writemem	= bsl_writemem,
+	.erase		= bsl_erase,
+	.getregs	= bsl_getregs,
+	.setregs	= bsl_setregs,
+	.ctl		= bsl_ctl,
+	.poll		= bsl_poll
+};

@@ -209,7 +209,7 @@ static int read_registers(struct gdb_data *data)
 	int i;
 
 	printc("Reading registers\n");
-	if (device_default->getregs(device_default, regs) < 0)
+	if (device_getregs(regs) < 0)
 		return gdb_send(data, "E00");
 
 	gdb_packet_start(data);
@@ -298,7 +298,7 @@ static int write_registers(struct gdb_data *data, char *buf)
 		buf += 4;
 	}
 
-	if (device_default->setregs(device_default, regs) < 0)
+	if (device_setregs(regs) < 0)
 		return gdb_send(data, "E00");
 
 	return gdb_send(data, "OK");
@@ -324,9 +324,9 @@ static int read_memory(struct gdb_data *data, char *text)
 	if (length > sizeof(buf))
 		length = sizeof(buf);
 
-	printc("Reading %3d bytes from 0x%04x\n", length, addr);
+	printc("Reading %4d bytes from 0x%04x\n", length, addr);
 
-	if (device_default->readmem(device_default, addr, buf, length) < 0)
+	if (device_readmem(addr, buf, length) < 0)
 		return gdb_send(data, "E00");
 
 	gdb_packet_start(data);
@@ -367,9 +367,9 @@ static int write_memory(struct gdb_data *data, char *text)
 		return gdb_send(data, "E00");
 	}
 
-	printc("Writing %3d bytes to 0x%04x\n", length, addr);
+	printc("Writing %4d bytes to 0x%04x\n", length, addr);
 
-	if (device_default->writemem(device_default, addr, buf, buflen) < 0)
+	if (device_writemem(addr, buf, buflen) < 0)
 		return gdb_send(data, "E00");
 
 	return gdb_send(data, "OK");
@@ -382,11 +382,11 @@ static int run_set_pc(struct gdb_data *data, char *buf)
 	if (!*buf)
 		return 0;
 
-	if (device_default->getregs(device_default, regs) < 0)
+	if (device_getregs(regs) < 0)
 		return -1;
 
 	regs[0] = strtoul(buf, NULL, 16);
-	return device_default->setregs(device_default, regs);
+	return device_setregs(regs);
 }
 
 static int run_final_status(struct gdb_data *data)
@@ -394,7 +394,7 @@ static int run_final_status(struct gdb_data *data)
 	address_t regs[DEVICE_NUM_REGS];
 	int i;
 
-	if (device_default->getregs(device_default, regs) < 0)
+	if (device_getregs(regs) < 0)
 		return gdb_send(data, "E00");
 
 	gdb_packet_start(data);
@@ -423,7 +423,7 @@ static int single_step(struct gdb_data *data, char *buf)
 	printc("Single stepping\n");
 
 	if (run_set_pc(data, buf) < 0 ||
-	    device_default->ctl(device_default, DEVICE_CTL_STEP) < 0)
+	    device_ctl(DEVICE_CTL_STEP) < 0)
 		gdb_send(data, "E00");
 
 	return run_final_status(data);
@@ -434,11 +434,11 @@ static int run(struct gdb_data *data, char *buf)
 	printc("Running\n");
 
 	if (run_set_pc(data, buf) < 0 ||
-	    device_default->ctl(device_default, DEVICE_CTL_RUN) < 0)
+	    device_ctl(DEVICE_CTL_RUN) < 0)
 		return gdb_send(data, "E00");
 
 	for (;;) {
-		device_status_t status = device_default->poll(device_default);
+		device_status_t status = device_poll();
 
 		if (status == DEVICE_STATUS_ERROR)
 			return gdb_send(data, "E00");
@@ -465,7 +465,7 @@ static int run(struct gdb_data *data, char *buf)
 	}
 
  out:
-	if (device_default->ctl(device_default, DEVICE_CTL_HALT) < 0)
+	if (device_ctl(DEVICE_CTL_HALT) < 0)
 		return gdb_send(data, "E00");
 
 	return run_final_status(data);
@@ -531,6 +531,9 @@ static int gdb_send_supported(struct gdb_data *data)
 
 static int process_gdb_command(struct gdb_data *data, char *buf, int len)
 {
+#ifdef DEBUG_GDB
+	printc("process_gdb_command: %s\n", buf);
+#endif
 	switch (buf[0]) {
 	case '?': /* Return target halt reason */
 		return run_final_status(data);
@@ -563,7 +566,13 @@ static int process_gdb_command(struct gdb_data *data, char *buf, int len)
 
 	case 's': /* Single step */
 		return single_step(data, buf + 1);
+	case 'k': /* kill */
+		return -1;
 	}
+
+#ifdef DEBUG_GDB
+	printc("process_gdb_command: unknown command %s\n", buf);
+#endif
 
 	/* For unknown/unsupported packets, return an empty reply */
 	return gdb_send(data, "");
@@ -693,7 +702,14 @@ static int gdb_server(int port)
 	for (i = 0; i < device_default->max_breakpoints; i++)
 		device_setbrk(device_default, i, 0, 0);
 
+#ifdef DEBUG_GDB
+	printc("starting GDB reader loop...\n");
+#endif
 	gdb_reader_loop(&data);
+#ifdef DEBUG_GDB
+	printc("... reader loop returned\n");
+#endif
+	close(client);
 
 	return data.error ? -1 : 0;
 }
@@ -703,7 +719,7 @@ int cmd_gdb(char **arg)
 	char *port_text = get_arg(arg);
 	address_t port = 2000;
 
-	if (port_text && expr_eval(stab_default, port_text, &port) < 0) {
+	if (port_text && expr_eval(port_text, &port) < 0) {
 		printc_err("gdb: can't parse port: %s\n", port_text);
 		return -1;
 	}

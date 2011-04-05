@@ -20,14 +20,10 @@
 #define FET_H_
 
 #include "device.h"
-#include "transport.h"
 
-/* MSP430 FET protocol implementation. */
-#define FET_PROTO_SPYBIWIRE	0x01
-#define FET_PROTO_RF2500	0x02
-#define FET_PROTO_OLIMEX        0x04
-
-device_t fet_open(transport_t transport, int proto_flags, int vcc_mv,
-		  const char *force_id);
+extern const struct device_class device_rf2500;
+extern const struct device_class device_olimex;
+extern const struct device_class device_olimex_iso;
+extern const struct device_class device_uif;
 
 #endif

@@ -38,6 +38,7 @@
 #include "opdb.h"
 #include "reader.h"
 #include "output.h"
+#include "simio.h"
 
 #include "sim.h"
 #include "bsl.h"
@@ -50,240 +51,24 @@
 #include "olimex.h"
 #include "rf2500.h"
 
-static void io_prefix(const char *prefix, uint16_t pc,
-		      uint16_t addr, int is_byte)
-{
-	char name[64];
-	address_t offset;
-
-	if (!stab_nearest(stab_default, pc, name, sizeof(name), &offset)) {
-		printf("%s", name);
-		if (offset)
-			printf("+0x%x", offset);
-	} else {
-		printf("0x%04x", pc);
-	}
-
-	printf(": IO %s.%c: 0x%04x", prefix, is_byte ? 'B' : 'W', addr);
-	if (!stab_nearest(stab_default, addr, name, sizeof(name), &offset)) {
-		printf(" (%s", name);
-		if (offset)
-			printf("+0x%x", offset);
-		printf(")");
-	}
-}
-
-static int fetch_io(void *user_data, uint16_t pc,
-		    uint16_t addr, int is_byte, uint16_t *data_ret)
-{
-	io_prefix("READ", pc, addr, is_byte);
-
-	for (;;) {
-		char text[128];
-		int len;
-		address_t data;
-
-		printf("? ");
-		fflush(stdout);
-		if (!fgets(text, sizeof(text), stdin)) {
-			printf("\nAborted IO request\n");
-			return -1;
-		}
-
-		len = strlen(text);
-		while (len && isspace(text[len - 1]))
-			len--;
-		text[len] = 0;
-
-		if (!len)
-			return 0;
-
-		if (!expr_eval(stab_default, text, &data)) {
-			if (data_ret)
-				*data_ret = data;
-			return 0;
-		}
-	}
-
-	return 0;
-}
-
-static void store_io(void *user_data, uint16_t pc,
-		     uint16_t addr, int is_byte, uint16_t data)
-{
-	io_prefix("WRITE", pc, addr, is_byte);
-
-	if (is_byte)
-		printf(" => 0x%02x\n", data & 0xff);
-	else
-		printf(" => 0x%04x\n", data);
-}
-
 struct cmdline_args {
-	const char      *driver_name;
-	const char      *serial_device;
-	const char      *usb_device;
-	const char      *fet_force_id;
-	int             want_jtag;
-	int             no_rc;
-	int             vcc_mv;
-	int		long_password;
+	const char		*driver_name;
+	int			no_rc;
+	struct device_args	devarg;
 };
 
-struct driver {
-	const char      *name;
-	const char      *help;
-	device_t        (*func)(const struct cmdline_args *args);
-};
-
-static device_t driver_open_fet(const struct cmdline_args *args,
-				int flags, transport_t trans)
-{
-	device_t dev;
-
-	if (!args->want_jtag)
-		flags |= FET_PROTO_SPYBIWIRE;
-
-	dev = fet_open(trans, flags, args->vcc_mv, args->fet_force_id);
-	if (!dev) {
-		trans->destroy(trans);
-		return NULL;
-	}
-
-	return dev;
-}
-
-static device_t driver_open_rf2500(const struct cmdline_args *args)
-{
-	transport_t trans;
-
-	if (args->serial_device) {
-		printc_err("This driver does not support tty devices.\n");
-		return NULL;
-	}
-
-	trans = rf2500_open(args->usb_device);
-	if (!trans)
-		return NULL;
-
-	return driver_open_fet(args, FET_PROTO_RF2500, trans);
-}
-
-static device_t driver_open_olimex(const struct cmdline_args *args)
-{
-	transport_t trans;
-
-	if (args->serial_device)
-		trans = uif_open(args->serial_device, UIF_TYPE_OLIMEX);
-	else
-		trans = olimex_open(args->usb_device);
-
-	if (!trans)
-		return NULL;
-
-	return driver_open_fet(args, FET_PROTO_OLIMEX, trans);
-}
-
-static device_t driver_open_olimex_iso(const struct cmdline_args *args)
-{
-	transport_t trans;
-
-	if (!args->serial_device) {
-		printc_err("This driver does not support USB access. "
-			   "Specify a tty device using -d.\n");
-		return NULL;
-	}
-
-	trans = uif_open(args->serial_device, UIF_TYPE_OLIMEX_ISO);
-	if (!trans)
-		return NULL;
-
-	return driver_open_fet(args, FET_PROTO_OLIMEX, trans);
-}
-
-static device_t driver_open_sim(const struct cmdline_args *args)
-{
-	return sim_open(fetch_io, store_io, NULL);
-}
-
-static device_t driver_open_uif(const struct cmdline_args *args)
-{
-	transport_t trans;
-
-	if (!args->serial_device) {
-		printc_err("This driver does not support USB access. "
-			   "Specify a tty device using -d.\n");
-		return NULL;
-	}
-
-	trans = uif_open(args->serial_device, UIF_TYPE_FET);
-	if (!trans)
-		return NULL;
-
-	return driver_open_fet(args, 0, trans);
-}
-
-static device_t driver_open_uif_bsl(const struct cmdline_args *args)
-{
-	if (!args->serial_device) {
-		printc_err("This driver does not support USB access. "
-			   "Specify a tty device using -d.\n");
-		return NULL;
-	}
-
-	return bsl_open(args->serial_device);
-}
-
-static device_t driver_open_flash_bsl(const struct cmdline_args *args)
-{
-	if (!args->serial_device) {
-		printc_err("This driver does not support USB access. "
-			   "Specify a tty device using -d.\n");
-		return NULL;
-	}
-
-	return flash_bsl_open(args->serial_device, args->long_password);
-}
-
-static const struct driver driver_table[] = {
-	{
-		.name = "rf2500",
-		.help = "eZ430-RF2500 devices. Only USB connection is "
-		"supported.",
-		driver_open_rf2500
-	},
-	{       .name = "olimex",
-		.help = "Olimex MSP-JTAG-TINY.",
-		.func = driver_open_olimex
-	},
-	{       .name = "olimex-iso",
-		.help = "Olimex MSP-JTAG-ISO.",
-		.func = driver_open_olimex_iso
-	},
-	{
-		.name = "sim",
-		.help = "Simulation mode.",
-		.func = driver_open_sim
-	},
-	{
-		.name = "uif",
-		.help = "TI FET430UIF and compatible devices (e.g. eZ430).",
-		.func = driver_open_uif
-	},
-	{
-		.name = "uif-bsl",
-		.help = "TI FET430UIF bootloader.",
-		.func = driver_open_uif_bsl
-	},
-	{
-		.name = "flash-bsl",
-		.help = "TI generic flash-based bootloader via RS-232",
-		.func = driver_open_flash_bsl
-	}
+static const struct device_class *const driver_table[] = {
+	&device_rf2500,
+	&device_olimex,
+	&device_olimex_iso,
+	&device_sim,
+	&device_uif,
+	&device_bsl,
+	&device_flash_bsl
 };
 
 static const char *version_text =
-"MSPDebug version 0.14 - debugging tool for MSP430 MCUs\n"
+"MSPDebug version 0.15 - debugging tool for MSP430 MCUs\n"
 "Copyright (C) 2009-2011 Daniel Beer <dlbeer@gmail.com>\n"
 "This is free software; see the source for copying conditions.  There is NO\n"
 "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR "
@@ -317,6 +102,8 @@ static void usage(const char *progname)
 "        Override the device ID returned by the FET.\n"
 "    --usb-list\n"
 "        Show a list of available USB devices.\n"
+"    --force-reset\n"
+"        Force target reset in initialization sequence.\n"
 "    --version\n"
 "        Show copyright and version information.\n"
 "\n"
@@ -329,7 +116,7 @@ static void usage(const char *progname)
 
 	printc("Available drivers are:\n");
 	for (i = 0; i < ARRAY_LEN(driver_table); i++) {
-		const struct driver *drv = &driver_table[i];
+		const struct device_class *drv = driver_table[i];
 
 		printc("    %s\n        %s\n", drv->name, drv->help);
 	}
@@ -384,8 +171,10 @@ static int parse_cmdline_args(int argc, char **argv,
 		{"usb-list",            0, 0, 'I'},
 		{"version",             0, 0, 'V'},
 		{"long-password",       0, 0, 'P'},
+		{"force-reset",       	0, 0, 'R'},
 		{NULL, 0, 0, 0}
 	};
+	int want_usb = 0;
 
 	while ((opt = getopt_long(argc, argv, "d:jv:nU:q",
 				  longopts, NULL)) >= 0)
@@ -408,18 +197,20 @@ static int parse_cmdline_args(int argc, char **argv,
 			exit(0);
 
 		case 'd':
-			args->serial_device = optarg;
+			args->devarg.path = optarg;
+			args->devarg.flags |= DEVICE_FLAG_TTY;
 			break;
 
 		case 'U':
-			args->usb_device = optarg;
+			args->devarg.path = optarg;
+			want_usb = 1;
 			break;
 
 		case 'L':
 			exit(list_devices());
 
 		case 'F':
-			args->fet_force_id = optarg;
+			args->devarg.forced_chip_id = optarg;
 			break;
 
 		case 'H':
@@ -431,11 +222,11 @@ static int parse_cmdline_args(int argc, char **argv,
 			exit(0);
 
 		case 'v':
-			args->vcc_mv = atoi(optarg);
+			args->devarg.vcc_mv = atoi(optarg);
 			break;
 
 		case 'j':
-			args->want_jtag = 1;
+			args->devarg.flags |= DEVICE_FLAG_JTAG;
 			break;
 
 		case 'n':
@@ -443,7 +234,11 @@ static int parse_cmdline_args(int argc, char **argv,
 			break;
 
 		case 'P':
-			args->long_password = 1;
+			args->devarg.flags |= DEVICE_FLAG_LONG_PW;
+			break;
+
+		case 'R':
+			args->devarg.flags |= DEVICE_FLAG_FORCE_RESET;
 			break;
 
 		case '?':
@@ -451,7 +246,7 @@ static int parse_cmdline_args(int argc, char **argv,
 			return -1;
 		}
 
-	if (args->usb_device && args->serial_device) {
+	if (want_usb && (args->devarg.flags & DEVICE_FLAG_TTY)) {
 		printc_err("You can't simultaneously specify a serial and "
 			"a USB device.\n");
 		return -1;
@@ -475,7 +270,7 @@ int setup_driver(struct cmdline_args *args)
 
 	i = 0;
 	while (i < ARRAY_LEN(driver_table) &&
-	       strcasecmp(driver_table[i].name, args->driver_name))
+	       strcasecmp(driver_table[i]->name, args->driver_name))
 		i++;
 	if (i >= ARRAY_LEN(driver_table)) {
 		printc_err("Unknown driver: %s. Try --help for a list.\n",
@@ -483,13 +278,12 @@ int setup_driver(struct cmdline_args *args)
 		return -1;
 	}
 
-	stab_default = stab_new();
-	if (!stab_default)
+	if (stab_init() < 0)
 		return -1;
 
-	device_default = driver_table[i].func(args);
+	device_default = driver_table[i]->open(&args->devarg);
 	if (!device_default) {
-		stab_destroy(stab_default);
+		stab_exit();
 		return -1;
 	}
 
@@ -503,13 +297,15 @@ int main(int argc, char **argv)
 
 	opdb_reset();
 
-	args.vcc_mv = 3000;
+	args.devarg.vcc_mv = 3000;
 	if (parse_cmdline_args(argc, argv, &args) < 0)
 		return -1;
 
 	printc_dbg("%s\n", version_text);
 	if (setup_driver(&args) < 0)
 		return -1;
+
+	simio_init();
 
 	if (!args.no_rc)
 		process_rc_file();
@@ -527,8 +323,9 @@ int main(int argc, char **argv)
 		reader_loop();
 	}
 
-	stab_destroy(stab_default);
-	device_default->destroy(device_default);
+	simio_exit();
+	stab_exit();
+	device_destroy();
 
 	return ret;
 }
