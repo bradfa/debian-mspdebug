@@ -1,3 +1,10 @@
+mspdebug (0.15-1) unstable; urgency=low
+
+  * New upstream version
+    + Initial IO peripheral simulator
+
+ -- Luca Bruno <lucab@debian.org>  Tue, 05 Apr 2011 10:01:34 +0200
+
 mspdebug (0.14-1) unstable; urgency=low
 
   * New upstream version
