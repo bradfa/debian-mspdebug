@@ -46,6 +46,7 @@
 #include "vector.h"
 #include "fet_db.h"
 #include "flash_bsl.h"
+#include "gdbc.h"
 
 #include "uif.h"
 #include "olimex.h"
@@ -64,11 +65,12 @@ static const struct device_class *const driver_table[] = {
 	&device_sim,
 	&device_uif,
 	&device_bsl,
-	&device_flash_bsl
+	&device_flash_bsl,
+	&device_gdbc
 };
 
 static const char *version_text =
-"MSPDebug version 0.15 - debugging tool for MSP430 MCUs\n"
+"MSPDebug version 0.16 - debugging tool for MSP430 MCUs\n"
 "Copyright (C) 2009-2011 Daniel Beer <dlbeer@gmail.com>\n"
 "This is free software; see the source for copying conditions.  There is NO\n"
 "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR "
