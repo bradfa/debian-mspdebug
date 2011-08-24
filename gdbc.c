@@ -18,18 +18,15 @@
 
 #include <stdlib.h>
 #include <string.h>
-#include <errno.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <netdb.h>
 #include <unistd.h>
+#include <errno.h>
 
+#include "sockets.h"
 #include "output.h"
 #include "gdbc.h"
 #include "gdb_proto.h"
 #include "opdb.h"
+#include "util.h"
 
 struct gdb_client {
 	struct device			base;
@@ -74,7 +71,7 @@ static void gdbc_destroy(device_t dev_base)
 	struct gdb_client *c = (struct gdb_client *)dev_base;
 
 	shutdown(c->gdb.sock, 2);
-	close(c->gdb.sock);
+	closesocket(c->gdb.sock);
 	free(c);
 }
 
@@ -278,8 +275,7 @@ static int gdbc_ctl(device_t dev_base, device_ctl_t op)
 
 	case DEVICE_CTL_HALT:
 		if (dev->is_running) {
-			if (write_all(dev->gdb.sock,
-				      (const uint8_t *)"\003", 1) < 0) {
+			if (sockets_send(dev->gdb.sock, "\003", 1, 0) < 1) {
 				pr_error("gdbc: write");
 				return -1;
 			}
@@ -382,14 +378,19 @@ static int connect_to(const char *spec)
 	printc_dbg("Looking up %s...\n", hostname);
 	ent = gethostbyname(hostname);
 	if (!ent) {
+#ifdef WIN32
+		printc_err("No such host: %s: %s\n", hostname,
+			   last_error());
+#else
 		printc_err("No such host: %s: %s\n", hostname,
 			   hstrerror(h_errno));
+#endif
 		return -1;
 	}
 
 	sock = socket(PF_INET, SOCK_STREAM, 0);
-	if (!sock) {
-		printc_err("socket: %s\n", strerror(errno));
+	if (SOCKET_ISERR(sock)) {
+		printc_err("socket: %s\n", last_error());
 		return -1;
 	}
 
@@ -399,9 +400,10 @@ static int connect_to(const char *spec)
 	printc_dbg("Connecting to %s:%d...\n",
 		   inet_ntoa(addr.sin_addr), port);
 
-	if (connect(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-		printc_err("connect: %s\n", strerror(errno));
-		close(sock);
+	if (sockets_connect(sock, (struct sockaddr *)&addr,
+			    sizeof(addr)) < 0) {
+		printc_err("connect: %s\n", last_error());
+		closesocket(sock);
 		return -1;
 	}
 
@@ -419,7 +421,7 @@ static device_t gdbc_open(const struct device_args *args)
 	dev = malloc(sizeof(struct gdb_client));
 	if (!dev) {
 		printc_err("gdbc: can't allocate memory: %s\n",
-			   strerror(errno));
+			   last_error());
 		return NULL;
 	}
 

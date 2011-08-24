@@ -21,19 +21,51 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <termios.h>
 #include <unistd.h>
 #include <errno.h>
 #include <signal.h>
 #include <assert.h>
+
+#ifdef WIN32
+#include <windows.h>
+#endif
 
 #include "util.h"
 #include "output.h"
 
 static volatile int ctrlc_flag;
 
+#ifdef WIN32
+static HANDLE ctrlc_event;
+
+static WINAPI BOOL ctrlc_handler(DWORD event)
+{
+	if (event == CTRL_C_EVENT) {
+		ctrlc_flag = 1;
+		SetEvent(ctrlc_event);
+		return TRUE;
+	}
+
+	return FALSE;
+}
+
+void ctrlc_init(void)
+{
+	ctrlc_event = CreateEvent(0, TRUE, FALSE, NULL);
+	SetConsoleCtrlHandler(ctrlc_handler, TRUE);
+}
+
+void ctrlc_reset(void)
+{
+	ctrlc_flag = 0;
+	ResetEvent(ctrlc_event);
+}
+
+HANDLE ctrlc_win32_event(void)
+{
+	return ctrlc_event;
+}
+#else /* WIN32 */
 static void sigint_handler(int signum)
 {
 	ctrlc_flag = 1;
@@ -41,7 +73,7 @@ static void sigint_handler(int signum)
 
 void ctrlc_init(void)
 {
-#ifdef WIN32
+#if defined(__CYGWIN__)
        signal(SIGINT, sigint_handler);
 #else
        const static struct sigaction siga = {
@@ -57,143 +89,12 @@ void ctrlc_reset(void)
 {
 	ctrlc_flag = 0;
 }
+#endif
 
 int ctrlc_check(void)
 {
 	return ctrlc_flag;
 }
-
-int read_with_timeout(int fd, uint8_t *data, int max_len)
-{
-	int r;
-
-	do {
-		struct timeval tv = {
-			.tv_sec = 5,
-			.tv_usec = 0
-		};
-
-		fd_set set;
-
-		FD_ZERO(&set);
-		FD_SET(fd, &set);
-
-		r = select(fd + 1, &set, NULL, NULL, &tv);
-		if (r > 0)
-			r = read(fd, data, max_len);
-
-		if (!r)
-			errno = ETIMEDOUT;
-		if (r <= 0 && errno != EINTR)
-			return -1;
-	} while (r <= 0);
-
-	return r;
-}
-
-/*
- * read_all_with_timeout
- * read all requested data, or die trying.
- *
- * Arguments:
- * fd: file descriptor from which to read
- * data: buffer where data will be put
- * len: total size of data to read
- *
- * Return Value:
- * Zero on success. -1 on failure.
- */
-int read_all_with_timeout(int fd, uint8_t *data, int len)
-{
-	int r, n_read;
-
-	/* loop until all required data has been read (or we time out) */
-	while (len > 0) {
-		struct timeval tv = {
-			.tv_sec = 5,
-			.tv_usec = 0
-		};
-
-		/* wait (with timeout) for data to become available */
-		fd_set set;
-
-		FD_ZERO(&set);
-		FD_SET(fd, &set);
-
-		r = select(fd + 1, &set, NULL, NULL, &tv);
-
-		if (r > 0) {
-			/* select( ) succeeded */
-			n_read = read(fd, data, len);
-			if (n_read <= 0) {
-				/* read failed */
-				return -1;
-			} else {
-				data += n_read;
-				len -= n_read;
-			}
-		} else if (!r) {
-			/* select( ) succeeded but timed out */
-			errno = ETIMEDOUT;
-			return -1;
-		} else if (errno != EINTR) {
-			/* select( ) failed */
-			return -1;
-		}
-
-	};
-
-	return 0;
-}
-
-int write_all(int fd, const uint8_t *data, int len)
-{
-	while (len) {
-		int result = write(fd, data, len);
-
-		if (result < 0) {
-			if (errno == EINTR)
-				continue;
-			return -1;
-		}
-
-		data += result;
-		len -= result;
-	}
-
-	return 0;
-}
-
-static int open_serial_and_set_cflags(const char *device, int rate, tcflag_t set)
-{
-	int fd = open(device, O_RDWR | O_NOCTTY);
-	struct termios attr;
-
-	if (fd < 0)
-		return -1;
-
-	tcgetattr(fd, &attr);
-	cfmakeraw(&attr);
-	cfsetispeed(&attr, rate);
-	cfsetospeed(&attr, rate);
-	attr.c_cflag |= set;
-
-	if (tcsetattr(fd, TCSAFLUSH, &attr) < 0)
-		return -1;
-
-	return fd;
-
-}
-
-int open_serial(const char *device, int rate)
-{
-	return open_serial_and_set_cflags(device, rate, 0);
-}
-
-int open_serial_even_parity(const char *device, int rate) {
-	return open_serial_and_set_cflags(device, rate, PARENB);
-}
-
 
 char *get_arg(char **text)
 {
@@ -328,4 +229,100 @@ int hexval(int c)
 		return c - 'a' + 10;
 
 	return 0;
+}
+
+#ifdef WIN32
+char *strsep(char **strp, const char *delim)
+{
+	char *start = *strp;
+	char *end = start;
+
+	if (!start)
+		return NULL;
+
+	while (*end) {
+		const char *d = delim;
+
+		while (*d) {
+			if (*d == *end) {
+				*(end++) = 0;
+				*strp = end;
+				return start;
+			}
+		}
+
+		end++;
+	}
+
+	*strp = NULL;
+	return start;
+}
+#endif
+
+#ifdef WIN32
+const char *last_error(void)
+{
+	DWORD err = GetLastError();
+	static char msg_buf[128];
+	int len;
+
+	FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM, NULL, err, 0,
+		      msg_buf, sizeof(msg_buf), NULL);
+
+	/* Trim trailing newline characters */
+	len = strlen(msg_buf);
+	while (len > 0 && isspace(msg_buf[len - 1]))
+		len--;
+	msg_buf[len] = 0;
+
+	return msg_buf;
+}
+#else
+const char *last_error(void)
+{
+	return strerror(errno);
+}
+#endif
+
+/* Expand leading `~/' in path names. Caller must free the returned ptr */
+char *expand_tilde(const char *path)
+{
+	char *home, *expanded;
+	size_t len;
+
+	if (!path)
+		return NULL;
+
+	if (!*path)
+		return strdup("");
+
+	expanded = NULL;
+
+	if (*path == '~' && *(path + 1) == '/') {
+		home = getenv("HOME");
+
+		if (home) {
+			/* Trailing '\0' will fit in leading '~'s place */
+			len = strlen(home) + strlen(path);
+			expanded = (char *)malloc(len);
+
+			if (expanded)
+				snprintf(expanded, len, "%s%s", home, path + 1);
+			else
+				printc_err("%s: malloc: %s\n", __FUNCTION__, last_error());
+
+		} else {
+			printc_err("%s: getenv: %s\n", __FUNCTION__, last_error());
+		}
+	} else {
+		expanded = (char *)malloc(strlen(path) + 1);
+
+		if (expanded)
+			strcpy(expanded, path);
+		else
+			printc_err("%s: malloc: %s\n", __FUNCTION__, last_error());
+	}
+
+	/* Caller must free()! */
+	return expanded;
 }

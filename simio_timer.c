@@ -25,7 +25,7 @@
 #include "output.h"
 
 /* TACTL bits (taken from mspgcc headers) */
-#define TASSEL2             0x0400  /* unused */        /* to distinguish from UART SSELx */
+#define TASSEL2             0x0400  /* unused */
 #define TASSEL1             0x0200  /* Timer A clock source select 1 */
 #define TASSEL0             0x0100  /* Timer A clock source select 0 */
 #define ID1                 0x0080  /* Timer A clock input divider 1 */
@@ -49,7 +49,7 @@
 #define OUTMOD0             0x0020  /* Output mode 0 */
 #define CCIE                0x0010  /* Capture/compare interrupt enable */
 #define CCI                 0x0008  /* Capture input signal (read) */
-#define OUT                 0x0004  /* PWM Output signal if output mode 0 */
+/* #define OUT                 0x0004  PWM Output signal if output mode 0 */
 #define COV                 0x0002  /* Capture/compare overflow flag */
 #define CCIFG               0x0001  /* Capture/compare interrupt flag */
 

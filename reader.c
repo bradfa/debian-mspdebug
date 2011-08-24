@@ -21,7 +21,6 @@
 #include <stdarg.h>
 #include <string.h>
 #include <ctype.h>
-#include <errno.h>
 
 #ifdef USE_READLINE
 #include <readline/readline.h>
@@ -135,6 +134,11 @@ static int do_command(char *arg, int interactive)
 		arg = translated;
 		cmd_text = get_arg(&arg);
 
+		/* Allow ^[# to stash a command in history without
+		 * attempting to execute */
+		if (*cmd_text == '#')
+			return 0;
+
 		if (!cmddb_get(cmd_text, &cmd)) {
 			int old = in_reader_loop;
 			int ret;
@@ -223,13 +227,18 @@ int process_command(char *cmd)
 int process_file(const char *filename, int show)
 {
 	FILE *in;
-	char buf[1024];
+	char buf[1024], *path;
 	int line_no = 0;
 
-	in = fopen(filename, "r");
+	path = expand_tilde(filename);
+	if (!path)
+		return -1;
+
+	in = fopen(path, "r");
+	free(path);
 	if (!in) {
 		printc_err("read: can't open %s: %s\n",
-			filename, strerror(errno));
+			filename, last_error());
 		return -1;
 	}
 
