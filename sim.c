@@ -47,8 +47,8 @@ struct sim_device {
 	 ((dev)->memory[(offset + 1) & 0xffff] << 8))
 #define MEM_SETW(dev, offset, value)					\
 	do {								\
-		(dev)->memory[offset] = (value) & 0xff;			\
-		(dev)->memory[(offset + 1) & 0xffff] = (value) >> 8;	\
+		(dev)->memory[offset & ~1] = (value) & 0xff;			\
+		(dev)->memory[offset | 1] = (value) >> 8;	\
 	} while (0);
 
 static int fetch_operand(struct sim_device *dev,
@@ -110,7 +110,7 @@ static int fetch_operand(struct sim_device *dev,
 			return 0;
 		}
 		addr = dev->regs[reg];
-		dev->regs[reg] += 2;
+		dev->regs[reg] += is_byte ? 1 : 2;
 		break;
 	}
 

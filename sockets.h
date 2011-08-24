@@ -16,19 +16,38 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef USBUTIL_H_
-#define USBUTIL_H_
+#ifndef SOCKETS_H_
+#define SOCKETS_H_
 
-#include <usb.h>
+#ifdef WIN32
+#include <winsock2.h>
+#include <stdio.h>
 
-/* List all available USB devices. */
-void usbutil_list(void);
+typedef int socklen_t;
 
-/* Search for the first device matching the given Vendor:Product */
-struct usb_device *usbutil_find_by_id(int vendor, int product,
-				      const char *requested_serial);
+#define SOCKET_ISERR(x) ((x) == INVALID_SOCKET)
+#else
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <fcntl.h>
 
-/* Search for a device using a bus:dev location string */
-struct usb_device *usbutil_find_by_loc(const char *loc);
+#define closesocket close
+
+typedef int SOCKET;
+
+#define SOCKET_ISERR(x) ((x) < 0)
+#endif
+
+/* These are versions of the blocking IO calls which can be interrupted
+ * by the user pressing Ctrl+C.
+ */
+SOCKET sockets_accept(SOCKET s, struct sockaddr *addr, socklen_t *addrlen);
+int sockets_connect(SOCKET s, const struct sockaddr *addr, socklen_t addrlen);
+ssize_t sockets_send(SOCKET s, const void *buf, size_t len, int flags);
+ssize_t sockets_recv(SOCKET s, void *buf, size_t len, int flags,
+		     int timeout_ms);
 
 #endif

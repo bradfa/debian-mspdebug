@@ -22,6 +22,10 @@
 #include <stdint.h>
 #include <ctype.h>
 
+#ifdef WIN32
+#include <windows.h>
+#endif
+
 #define ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
 
 #define LE_BYTE(b, x) ((int)((uint8_t *)(b))[x])
@@ -31,12 +35,8 @@
 /* This type fits an MSP430X register value */
 typedef uint32_t address_t;
 
-/* Various utility functions for IO */
-int open_serial(const char *device, int rate);
-int open_serial_even_parity(const char *device, int rate);
-int read_with_timeout(int fd, uint8_t *data, int len);
-int read_all_with_timeout(int fd, uint8_t *data, int len);
-int write_all(int fd, const uint8_t *data, int len);
+/* Retrive a string describing the last system error */
+const char *last_error(void);
 
 /* Check and catch ^C from the user */
 void ctrlc_init(void);
@@ -58,5 +58,14 @@ static inline int ishex(int c)
 }
 
 int hexval(int c);
+
+#ifdef WIN32
+char *strsep(char **strp, const char *delim);
+
+HANDLE ctrlc_win32_event(void);
+#endif
+
+/* Expand `~' in path names. Caller must free the returned ptr */
+char *expand_tilde(const char *path);
 
 #endif

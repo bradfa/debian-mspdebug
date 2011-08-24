@@ -55,3 +55,13 @@ Ionut Nicu <ionut.nicu@mindbit.ro>:
 
 Paul Fleischer <paul@xpg.dk>:
 	* Support for MSP430G2553.
+
+Kurt Snieckus <ksnieck@gmail.com>:
+	* Testing and analysis for MSP430FR5739.
+
+James Nuss <jamesnuss@nanometrics.ca>:
+	* Support for MSP430F5418.
+
+Tamas Tevesz <ice@extreme.hu>:
+	* Improvements to interactive interface.
+	* Support for MSP430AFE253.

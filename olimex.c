@@ -18,6 +18,7 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <usb.h>
 
@@ -99,6 +100,14 @@ static int open_interface(struct olimex_transport *tr,
 						tr->int_number) < 0)
 			pr_error(__FILE__": warning: can't detach "
 			       "kernel driver");
+	}
+#endif
+
+#ifdef WIN32
+	if (usb_set_configuration(tr->handle, 1) < 0) {
+		pr_error(__FILE__": can't set configuration 1");
+		usb_close(tr->handle);
+		return -1;
 	}
 #endif
 
@@ -221,7 +230,7 @@ static void usbtr_destroy(transport_t tr_base)
 	free(tr);
 }
 
-transport_t olimex_open(const char *devpath)
+transport_t olimex_open(const char *devpath, const char *requested_serial)
 {
 	struct olimex_transport *tr = malloc(sizeof(*tr));
 	struct usb_device *dev;
@@ -243,9 +252,11 @@ transport_t olimex_open(const char *devpath)
 	if (devpath) {
 		dev = usbutil_find_by_loc(devpath);
 	} else {
-		dev = usbutil_find_by_id(USB_FET_VENDOR, V1_PRODUCT);
+		dev = usbutil_find_by_id(USB_FET_VENDOR, V1_PRODUCT,
+					 requested_serial);
 		if (!dev)
-			dev = usbutil_find_by_id(USB_FET_VENDOR, V2_PRODUCT);
+			dev = usbutil_find_by_id(USB_FET_VENDOR, V2_PRODUCT,
+						 requested_serial);
 	}
 
 	if (!dev) {

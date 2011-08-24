@@ -19,14 +19,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <errno.h>
 #include <unistd.h>
 #include <ctype.h>
 #include <stdarg.h>
 #include <stdint.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
+
+#include "sockets.h"
 #include "device.h"
 #include "util.h"
 #include "opdb.h"
@@ -452,13 +450,14 @@ static int gdb_server(int port)
 	int i;
 
 	sock = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP);
-	if (sock < 0) {
+	if (SOCKET_ISERR(sock)) {
 		pr_error("gdb: can't create socket");
 		return -1;
 	}
 
 	arg = 1;
-	if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &arg, sizeof(arg)) < 0)
+	if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR,
+		       (void *)&arg, sizeof(arg)) < 0)
 		pr_error("gdb: warning: can't reuse socket address");
 
 	addr.sin_family = AF_INET;
@@ -466,28 +465,28 @@ static int gdb_server(int port)
 	addr.sin_addr.s_addr = htonl(INADDR_ANY);
 	if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
 		printc_err("gdb: can't bind to port %d: %s\n",
-			port, strerror(errno));
-		close(sock);
+			port, last_error());
+		closesocket(sock);
 		return -1;
 	}
 
 	if (listen(sock, 1) < 0) {
 		pr_error("gdb: can't listen on socket");
-		close(sock);
+		closesocket(sock);
 		return -1;
 	}
 
 	printc("Bound to port %d. Now waiting for connection...\n", port);
 
 	len = sizeof(addr);
-	client = accept(sock, (struct sockaddr *)&addr, &len);
-	if (client < 0) {
+	client = sockets_accept(sock, (struct sockaddr *)&addr, &len);
+	if (SOCKET_ISERR(client)) {
 		pr_error("gdb: failed to accept connection");
-		close(sock);
+		closesocket(sock);
 		return -1;
 	}
 
-	close(sock);
+	closesocket(sock);
 	printc("Client connected from %s:%d\n",
 	       inet_ntoa(addr.sin_addr), htons(addr.sin_port));
 
@@ -505,7 +504,7 @@ static int gdb_server(int port)
 #ifdef DEBUG_GDB
 	printc("... reader loop returned\n");
 #endif
-	close(client);
+	closesocket(client);
 
 	return data.error ? -1 : 0;
 }
