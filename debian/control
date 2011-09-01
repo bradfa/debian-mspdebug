@@ -3,7 +3,7 @@ Section: electronics
 Priority: extra
 Maintainer: Luca Bruno <lucab@debian.org>
 Build-Depends: debhelper (>= 7.0.50~), libusb-dev, libreadline-dev
-Standards-Version: 3.9.1
+Standards-Version: 3.9.2
 Homepage: http://mspdebug.sourceforge.net/
 Vcs-Git: git://git.debian.org/collab-maint/mspdebug.git
 Vcs-Browser: http://git.debian.org/?p=collab-maint/mspdebug.git;a=summary
