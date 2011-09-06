@@ -1,3 +1,11 @@
+mspdebug (0.17-2) unstable; urgency=low
+
+  * Bumped Standards-Version to 3.9.2 (no changes needed)
+  * Add udev rule to give LaunchPad devices to plugdev group (Closes: #637364)
+  * Moved to crosstoolchain git repository
+
+ -- Luca Bruno <lucab@debian.org>  Tue, 06 Sep 2011 16:31:59 +0200
+
 mspdebug (0.17-1) unstable; urgency=low
 
   * New upstream version
