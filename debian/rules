@@ -7,5 +7,9 @@
 %:
 	dh $@
 
+# Change TTY permission, run after default permission rules (prio. 91)
+override_dh_installudev:
+	dh_installudev --priority=92
+
 override_dh_auto_install:
 	dh_auto_install -- PREFIX=/usr
