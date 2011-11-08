@@ -1,10 +1,18 @@
+mspdebug (0.18-1) unstable; urgency=low
+
+  * New upstream version
+    + GDB protocol bug fixes
+    + Support for raw USB access to UIF and eZ430
+
+ -- Luca Bruno <lucab@debian.org>  Tue, 08 Nov 2011 23:14:56 +0100
+
 mspdebug (0.17-2) unstable; urgency=low
 
   * Bumped Standards-Version to 3.9.2 (no changes needed)
   * Add udev rule to give LaunchPad devices to plugdev group (Closes: #637364)
   * Moved to crosstoolchain git repository
 
- -- Luca Bruno <lucab@debian.org>  Tue, 06 Sep 2011 16:31:59 +0200
+ -- Luca Bruno <lucab@debian.org>  Tue, 08 Nov 2011 23:14:37 +0100
 
 mspdebug (0.17-1) unstable; urgency=low
 
