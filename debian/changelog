@@ -1,3 +1,12 @@
+mspdebug (0.19-1) unstable; urgency=low
+
+  * New upstream version
+    + Eclipse compatibility
+    + New chips support
+  * Bumped Standards-Version (no changes)
+
+ -- Luca Bruno <lucab@debian.org>  Tue, 13 Mar 2012 09:31:16 +0100
+
 mspdebug (0.18-1) unstable; urgency=low
 
   * New upstream version
