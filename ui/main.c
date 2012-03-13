@@ -1,5 +1,5 @@
 /* MSPDebug - debugging tool for MSP430 MCUs
- * Copyright (C) 2009, 2010 Daniel Beer
+ * Copyright (C) 2009-2012 Daniel Beer
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -61,6 +61,7 @@ struct cmdline_args {
 static const struct device_class *const driver_table[] = {
 	&device_rf2500,
 	&device_olimex,
+	&device_olimex_v1,
 	&device_olimex_iso,
 	&device_sim,
 	&device_uif,
@@ -71,8 +72,8 @@ static const struct device_class *const driver_table[] = {
 };
 
 static const char *version_text =
-"MSPDebug version 0.18 - debugging tool for MSP430 MCUs\n"
-"Copyright (C) 2009-2011 Daniel Beer <dlbeer@gmail.com>\n"
+"MSPDebug version 0.19 - debugging tool for MSP430 MCUs\n"
+"Copyright (C) 2009-2012 Daniel Beer <dlbeer@gmail.com>\n"
 "This is free software; see the source for copying conditions.  There is NO\n"
 "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR "
 "PURPOSE.\n";
@@ -111,6 +112,9 @@ static void usage(const char *progname)
 "        Force target reset in initialization sequence.\n"
 "    --allow-fw-update\n"
 "        Update FET firmware (tilib only) if necessary.\n"
+"    --require-fw-update <image.txt>\n"
+"        Require FET firmware update (tilib only). The image must be\n"
+"        a TI Text file.\n"
 "    --version\n"
 "        Show copyright and version information.\n"
 "\n"
@@ -171,7 +175,7 @@ static int parse_cmdline_args(int argc, char **argv,
 			      struct cmdline_args *args)
 {
 	int opt;
-	const static struct option longopts[] = {
+	static const struct option longopts[] = {
 		{"help",                0, 0, 'H'},
 		{"fet-list",            0, 0, 'L'},
 		{"fet-force-id",        1, 0, 'F'},
@@ -180,6 +184,7 @@ static int parse_cmdline_args(int argc, char **argv,
 		{"long-password",       0, 0, 'P'},
 		{"force-reset",		0, 0, 'R'},
 		{"allow-fw-update",	0, 0, 'A'},
+		{"require-fw-update",	1, 0, 'M'},
 		{NULL, 0, 0, 0}
 	};
 	int want_usb = 0;
@@ -189,7 +194,7 @@ static int parse_cmdline_args(int argc, char **argv,
 		switch (opt) {
 		case 'q':
 			{
-				const static union opdb_value v = {
+				static const union opdb_value v = {
 					.boolean = 1
 				};
 
@@ -211,6 +216,10 @@ static int parse_cmdline_args(int argc, char **argv,
 		case 'd':
 			args->devarg.path = optarg;
 			args->devarg.flags |= DEVICE_FLAG_TTY;
+			break;
+
+		case 'M':
+			args->devarg.require_fwupdate = optarg;
 			break;
 
 		case 'U':
@@ -332,6 +341,9 @@ int main(int argc, char **argv)
 {
 	struct cmdline_args args = {0};
 	int ret = 0;
+
+	setvbuf(stderr, NULL, _IOFBF, 0);
+	setvbuf(stdout, NULL, _IOFBF, 0);
 
 	opdb_reset();
 	ctrlc_init();

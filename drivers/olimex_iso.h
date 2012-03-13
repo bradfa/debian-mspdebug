@@ -1,5 +1,5 @@
 /* MSPDebug - debugging tool for MSP430 MCUs
- * Copyright (C) 2009, 2010 Daniel Beer
+ * Copyright (C) 2012 Daniel Beer
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,15 +16,17 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef FET_H_
-#define FET_H_
+#ifndef OLIMEX_ISO_H_
+#define OLIMEX_ISO_H_
 
-#include "device.h"
+#include "transport.h"
 
-extern const struct device_class device_rf2500;
-extern const struct device_class device_olimex;
-extern const struct device_class device_olimex_v1;
-extern const struct device_class device_olimex_iso;
-extern const struct device_class device_uif;
+/* Search the USB bus for the first Olimex ISO device and initialize it.
+ * If successful, return a transport object. Otherwise, return NULL.
+ *
+ * A particular USB device or serial number may be specified.
+ */
+transport_t olimex_iso_open(const char *usb_device,
+			    const char *requested_serial);
 
 #endif

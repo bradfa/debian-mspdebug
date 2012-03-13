@@ -192,7 +192,7 @@ static int config_channel(struct timer *tr, char **arg_text)
 		return -1;
 	}
 
-	if (which < 0 || which > tr->size) {
+	if (which > tr->size) {
 		printc_err("timer: invalid channel number: %d\n", which);
 		return -1;
 	}
@@ -416,6 +416,8 @@ static void timer_step(struct simio_device *dev,
 	struct timer *tr = (struct timer *)dev;
 	int pulse_count;
 	int i;
+
+	(void)status;
 
 	/* Count input clock pulses */
 	i = (tr->tactl >> 8) & 3;

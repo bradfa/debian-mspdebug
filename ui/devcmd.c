@@ -38,6 +38,8 @@ int cmd_regs(char **arg)
 	uint8_t code[16];
 	int len = sizeof(code);
 
+	(void)arg;
+
 	if (device_getregs(regs) < 0)
 		return -1;
 	show_regs(regs);
@@ -134,6 +136,8 @@ int cmd_mw(char **arg)
 
 int cmd_reset(char **arg)
 {
+	(void)arg;
+
 	return device_ctl(DEVICE_CTL_RESET);
 }
 
@@ -198,6 +202,8 @@ int cmd_run(char **arg)
 {
 	device_status_t status;
 	address_t regs[DEVICE_NUM_REGS];
+
+	(void)arg;
 
 	if (device_getregs(regs) < 0) {
 		printc_err("warning: device: can't fetch registers\n");
@@ -354,7 +360,7 @@ static int hexout_start(struct hexout_data *hexout, const char *filename)
 	return 0;
 }
 
-static int hexout_write(FILE *out, int len, uint16_t addr, int type,
+static int hexout_write(FILE *out, int len, uint16_t addr,
 			const uint8_t *payload)
 {
 	int i;
@@ -393,13 +399,13 @@ static int hexout_flush(struct hexout_data *hexout)
 	if (segoff != hexout->segoff) {
 		uint8_t offset_data[] = {segoff >> 8, segoff & 0xff};
 
-		if (hexout_write(hexout->file, 2, 0, 4, offset_data) < 0)
+		if (hexout_write(hexout->file, 2, 0, offset_data) < 0)
 			return -1;
 		hexout->segoff = segoff;
 	}
 
 	if (hexout_write(hexout->file, hexout->len, addr_low,
-			 0, hexout->buf) < 0)
+			 hexout->buf) < 0)
 		return -1;
 	hexout->len = 0;
 	return 0;
@@ -537,10 +543,11 @@ static int do_cmd_prog(char **arg, int prog_flags)
 	if (prog_flush(&prog) < 0)
 		return -1;
 
-	if (device_ctl(DEVICE_CTL_RESET) < 0) {
-		printc_err("prog: failed to reset after programming\n");
-		return -1;
-	}
+	printc("Done, %d bytes written\n", prog.total_written);
+
+	if (device_ctl(DEVICE_CTL_RESET) < 0)
+		printc_err("warning: prog: "
+			   "failed to reset after programming\n");
 
 	unmark_modified(MODIFY_SYMS);
 	return 0;
@@ -627,6 +634,8 @@ int cmd_delbreak(char **arg)
 int cmd_break(char **arg)
 {
 	int i;
+
+	(void)arg;
 
 	printc("%d breakpoints available:\n", device_default->max_breakpoints);
 	for (i = 0; i < device_default->max_breakpoints; i++) {

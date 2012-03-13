@@ -36,6 +36,7 @@
 
 #include "uif.h"
 #include "olimex.h"
+#include "olimex_iso.h"
 #include "rf2500.h"
 #include "ti3410.h"
 
@@ -50,6 +51,9 @@
 
 /* The new identify method should always be used */
 #define FET_PROTO_IDENTIFY_NEW		0x08
+
+/* A reset on startup should always be performed */
+#define FET_PROTO_FORCE_RESET           0x10
 
 #define MAX_PARAMS		16
 #define MAX_BLOCK_SIZE		4096
@@ -1025,7 +1029,7 @@ static device_t fet_open(const struct device_args *args,
 	dev->transport = transport;
 	dev->flags = flags;
 
-	if (try_open(dev, args, 0) < 0) {
+	if (try_open(dev, args, flags & FET_PROTO_FORCE_RESET) < 0) {
 		usleep(500000);
 		printc("Trying again...\n");
 		if (try_open(dev, args, 1) < 0)
@@ -1090,7 +1094,7 @@ static device_t fet_open_olimex(const struct device_args *args)
                 return NULL;
 
 	return fet_open(args, FET_PROTO_NOLEAD_SEND | FET_PROTO_EXTRA_RECV |
-			      FET_PROTO_IDENTIFY_NEW,
+			      FET_PROTO_IDENTIFY_NEW | FET_PROTO_FORCE_RESET,
 			trans, &device_olimex);
 }
 
@@ -1109,18 +1113,49 @@ const struct device_class device_olimex = {
 	.poll		= fet_poll
 };
 
+static device_t fet_open_olimex_v1(const struct device_args *args)
+{
+	transport_t trans;
+
+	if (args->flags & DEVICE_FLAG_TTY)
+		trans = uif_open(args->path, UIF_TYPE_OLIMEX_V1);
+	else
+		trans = olimex_open(args->path, args->requested_serial);
+
+        if (!trans)
+                return NULL;
+
+	return fet_open(args, FET_PROTO_NOLEAD_SEND | FET_PROTO_EXTRA_RECV |
+			      FET_PROTO_IDENTIFY_NEW,
+			trans, &device_olimex_v1);
+}
+
+const struct device_class device_olimex_v1 = {
+	.name		= "olimex-v1",
+	.help		=
+"Olimex MSP-JTAG-TINY (V1).",
+	.open		= fet_open_olimex_v1,
+	.destroy	= fet_destroy,
+	.readmem	= fet_readmem,
+	.writemem	= fet_writemem,
+	.erase		= fet_erase,
+	.getregs	= fet_getregs,
+	.setregs	= fet_setregs,
+	.ctl		= fet_ctl,
+	.poll		= fet_poll
+};
+
 static device_t fet_open_olimex_iso(const struct device_args *args)
 {
 	transport_t trans;
 
-	if (!(args->flags & DEVICE_FLAG_TTY)) {
-		printc_err("This driver does not support raw USB access.\n");
-		return NULL;
-	}
+	if (args->flags & DEVICE_FLAG_TTY)
+		trans = uif_open(args->path, UIF_TYPE_OLIMEX_ISO);
+	else
+		trans = olimex_iso_open(args->path, args->requested_serial);
 
-	trans = uif_open(args->path, UIF_TYPE_OLIMEX_ISO);
-        if (!trans)
-                return NULL;
+	if (!trans)
+		return NULL;
 
 	return fet_open(args, FET_PROTO_NOLEAD_SEND | FET_PROTO_EXTRA_RECV |
 			      FET_PROTO_IDENTIFY_NEW,

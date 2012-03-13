@@ -90,7 +90,7 @@ struct tilib_device {
 
 #define MID_HALT_ANY		(MID_BREAKPOINT | MID_CPU_STOPPED)
 
-const static MessageID_t my_message_ids = {
+static const MessageID_t my_message_ids = {
 	.uiMsgIdSingleStep	= MID_SINGLE_STEP,
 	.uiMsgIdBreakpoint	= MID_BREAKPOINT,
 	.uiMsgIdStorage		= MID_STORAGE,
@@ -103,6 +103,9 @@ static void event_notify(unsigned int msg_id, unsigned int w_param,
 			 long l_param, long client_handle)
 {
 	struct tilib_device *dev = (struct tilib_device *)client_handle;
+
+	(void)w_param;
+	(void)l_param;
 
 	threads_lock_acquire(&dev->mb_lock);
 	dev->mailbox |= msg_id;
@@ -435,6 +438,8 @@ static void fw_progress(unsigned int msg_id, unsigned long w_param,
 {
 	struct tilib_device *dev = (struct tilib_device *)client_handle;
 
+	(void)l_param;
+
 	switch (msg_id) {
 	case BL_DATA_BLOCK_PROGRAMMED:
 		if (w_param > 100)
@@ -477,10 +482,11 @@ static void fw_progress(unsigned int msg_id, unsigned long w_param,
 	}
 }
 
-static int do_fw_update(struct tilib_device *dev)
+static int do_fw_update(struct tilib_device *dev, const char *filename)
 {
 	printc("Starting firmware update (this may take some time)...\n");
-	if (dev->MSP430_FET_FwUpdate(NULL, fw_progress, (long)dev) < 0) {
+	if (dev->MSP430_FET_FwUpdate((char *)filename,
+				     fw_progress, (long)dev) < 0) {
 		report_error(dev, "MSP430_FET_FwUpdate");
 		return -1;
 	}
@@ -506,11 +512,19 @@ static int do_init(struct tilib_device *dev, const struct device_args *args)
 		return -1;
 	}
 
-	if (version < 0) {
+	if (args->require_fwupdate) {
+		printc("Updating firmware using %s\n",
+		       args->require_fwupdate);
+
+		if (do_fw_update(dev, args->require_fwupdate) < 0) {
+			dev->MSP430_Close(0);
+			return -1;
+		}
+	} else if (version < 0) {
 		printc("FET firmware update is required.\n");
 
 		if (args->flags & DEVICE_FLAG_DO_FWUPDATE) {
-			if (do_fw_update(dev) < 0) {
+			if (do_fw_update(dev, NULL) < 0) {
 				dev->MSP430_Close(0);
 				return -1;
 			}

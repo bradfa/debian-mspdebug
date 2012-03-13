@@ -208,6 +208,8 @@ static void bsl_destroy(device_t dev_base)
 
 static int bsl_ctl(device_t dev_base, device_ctl_t type)
 {
+	(void)dev_base;
+
 	switch (type) {
 	case DEVICE_CTL_HALT:
 		/* Ignore halt requests */
@@ -226,17 +228,25 @@ static int bsl_ctl(device_t dev_base, device_ctl_t type)
 
 static device_status_t bsl_poll(device_t dev_base)
 {
+	(void)dev_base;
+
 	return DEVICE_STATUS_HALTED;
 }
 
 static int bsl_getregs(device_t dev_base, address_t *regs)
 {
+	(void)dev_base;
+	(void)regs;
+
 	printc_err("bsl: register fetch is not implemented\n");
 	return -1;
 }
 
 static int bsl_setregs(device_t dev_base, const address_t *regs)
 {
+	(void)dev_base;
+	(void)regs;
+
 	printc_err("bsl: register store is not implemented\n");
 	return -1;
 }
@@ -308,6 +318,8 @@ static int bsl_erase(device_t dev_base, device_erase_type_t type,
 {
 	struct bsl_device *dev = (struct bsl_device *)dev_base;
 
+	(void)addr;
+
 	if (type != DEVICE_ERASE_MAIN) {
 		printc_err("bsl: only main erase is supported\n");
 		return -1;
@@ -365,7 +377,7 @@ static device_t bsl_open(const struct device_args *args)
 
 	dev->base.type = &device_bsl;
 
-	dev->serial_fd = sport_open(args->path, B460800, 0);
+	dev->serial_fd = sport_open(args->path, 460800, 0);
 	if (SPORT_ISERR(dev->serial_fd)) {
 		printc_err("bsl: can't open %s: %s\n",
 			   args->path, last_error());
@@ -374,7 +386,7 @@ static device_t bsl_open(const struct device_args *args)
 	}
 
 	if (enter_via_fet(dev) < 0)
-		return NULL;
+		printc_err("bsl: warning: FET firmware not responding\n");
 
 	usleep(500000);
 

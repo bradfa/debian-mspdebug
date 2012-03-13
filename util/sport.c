@@ -23,21 +23,107 @@
 
 #include "sport.h"
 #include "util.h"
+#include "output.h"
+
+#ifdef __linux__
+#include <linux/serial.h>
+#endif
 
 #ifndef WIN32
+
+#ifndef B460800
+#define B460800 460800
+#endif
+
+#ifndef B500000
+#define B500000 500000
+#endif
+
+struct baud_rate {
+	int             rate;
+	int             code;
+};
+
+static const struct baud_rate baud_rates[] = {
+	{9600,          B9600},
+	{115200,        B115200},
+	{460800,        B460800},
+	{500000,        B500000}
+};
+
+static int rate_to_code(int rate)
+{
+	int i;
+
+	for (i = 0; i < ARRAY_LEN(baud_rates); i++)
+		if (baud_rates[i].rate == rate)
+			return baud_rates[i].code;
+
+	return -1;
+}
+
+#if defined(__linux__)
+static int set_nonstandard_rate(int fd, struct termios *attr, int rate)
+{
+	struct serial_struct ss;
+
+	/* We need to set the rate code to B38400 on Linux for
+	 * the non-standard rate to take effect.
+	 */
+	cfsetispeed(attr, B38400);
+	cfsetospeed(attr, B38400);
+
+	if (ioctl(fd, TIOCGSERIAL, &ss) < 0) {
+		pr_error("sport: TIOCGSERIAL failed");
+		return -1;
+	}
+
+	ss.custom_divisor = ss.baud_base / rate;
+	ss.flags = ASYNC_SPD_CUST;
+
+	if (ioctl(fd, TIOCSSERIAL, &ss) < 0) {
+		pr_error("sport: TIOCSSERIAL failed");
+		return -1;
+	}
+
+	return 0;
+}
+#elif defined(__OpenBSD__) || defined(__FreeBSD__) || defined(__NetBSD__)
+static int set_nonstandard_rate(int fd, struct termios *attr, int rate)
+{
+	cfsetispeed(attr, rate);
+	cfsetospeed(attr, rate);
+
+	return 0;
+}
+#else
+static int set_nonstandard_rate(int fd, struct termios *attr, int rate)
+{
+	printc_err("sport: Can't set non-standard baud rate %d on "
+		   "this platform\n", rate);
+	return -1;
+}
+#endif
 
 sport_t sport_open(const char *device, int rate, int flags)
 {
 	int fd = open(device, O_RDWR | O_NOCTTY);
 	struct termios attr;
+	int rate_code = rate_to_code(rate);
 
 	if (fd < 0)
 		return -1;
 
 	tcgetattr(fd, &attr);
 	cfmakeraw(&attr);
-	cfsetispeed(&attr, rate);
-	cfsetospeed(&attr, rate);
+
+	if (rate_code >= 0) {
+		cfsetispeed(&attr, rate_code);
+		cfsetospeed(&attr, rate_code);
+	} else if (set_nonstandard_rate(fd, &attr, rate) < 0) {
+		close(fd);
+		return -1;
+	}
 
 	if (flags & SPORT_EVEN_PARITY)
 		attr.c_cflag |= PARENB;
