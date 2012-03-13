@@ -1,3 +1,12 @@
+mspdebug (0.19-1) unstable; urgency=low
+
+  * New upstream version
+    + Eclipse compatibility
+    + New chips support
+  * Bumped Standards-Version (no changes)
+
+ -- Luca Bruno <lucab@debian.org>  Tue, 13 Mar 2012 09:31:16 +0100
+
 mspdebug (0.18-1) unstable; urgency=low
 
   * New upstream version
@@ -12,7 +21,7 @@ mspdebug (0.17-2) unstable; urgency=low
   * Add udev rule to give LaunchPad devices to plugdev group (Closes: #637364)
   * Moved to crosstoolchain git repository
 
- -- Luca Bruno <lucab@debian.org>  Tue, 08 Nov 2011 23:14:37 +0100
+ -- Luca Bruno <lucab@debian.org>  Tue, 06 Sep 2011 16:31:59 +0200
 
 mspdebug (0.17-1) unstable; urgency=low
 
