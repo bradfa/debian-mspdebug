@@ -437,6 +437,8 @@ static int flash_bsl_unlock(struct flash_bsl_device *dev)
 
 static int flash_bsl_ctl(device_t dev_base, device_ctl_t type)
 {
+	(void)dev_base;
+
 	switch (type) {
 	case DEVICE_CTL_HALT:
 		/* Ignore halt requests */
@@ -455,17 +457,25 @@ static int flash_bsl_ctl(device_t dev_base, device_ctl_t type)
 
 static device_status_t flash_bsl_poll(device_t dev_base)
 {
+	(void)dev_base;
+
 	return DEVICE_STATUS_HALTED;
 }
 
 static int flash_bsl_getregs(device_t dev_base, address_t *regs)
 {
+	(void)dev_base;
+	(void)regs;
+
 	printc_err("flash_bsl: register fetch is not implemented\n");
 	return -1;
 }
 
 static int flash_bsl_setregs(device_t dev_base, const address_t *regs)
 {
+	(void)dev_base;
+	(void)regs;
+
 	printc_err("flash_bsl: register store is not implemented\n");
 	return -1;
 }
@@ -631,7 +641,7 @@ static device_t flash_bsl_open(const struct device_args *args)
 	memset(dev, 0, sizeof(*dev));
 	dev->base.type = &device_flash_bsl;
 
-	dev->serial_fd = sport_open(args->path, B9600, SPORT_EVEN_PARITY);
+	dev->serial_fd = sport_open(args->path, 9600, SPORT_EVEN_PARITY);
 	if (SPORT_ISERR(dev->serial_fd)) {
 		printc_err("flash_bsl: can't open %s: %s\n",
 			   args->path, last_error());
@@ -642,9 +652,8 @@ static device_t flash_bsl_open(const struct device_args *args)
 	dev->long_password = args->flags & DEVICE_FLAG_LONG_PW;
 
 	/* enter bootloader */
-	if (enter_via_dtr_rts(dev) < 0) {
-                goto fail;
-	}
+	if (enter_via_dtr_rts(dev) < 0)
+		goto fail;
 
 	usleep(500000);
 

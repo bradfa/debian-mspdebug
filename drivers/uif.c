@@ -28,11 +28,6 @@
 #include "output.h"
 #include "sport.h"
 
-#if defined(__linux__)
-#include <linux/serial.h>
-#include <fcntl.h>
-#endif
-
 struct uif_transport {
 	struct transport        base;
 
@@ -80,37 +75,6 @@ static void serial_destroy(transport_t tr_base)
 	free(tr);
 }
 
-#if defined(__linux__)
-static int open_olimex_iso(const char *device)
-{
-        int fd = open(device, O_RDWR | O_NOCTTY);
-        struct termios attr;
-        struct serial_struct serial_info;
-
-        if (fd < 0)
-                return -1;
-
-        tcgetattr(fd, &attr);
-        cfmakeraw(&attr);
-        cfsetispeed(&attr, B38400);
-        cfsetospeed(&attr, B38400);
-
-        serial_info.flags = ASYNC_SPD_CUST;
-        serial_info.custom_divisor = 120;
-        if (ioctl(fd, TIOCSSERIAL, &serial_info) < 0) {
-		printc_err("open_olimex_iso: can't do "
-			   "ioctl TIOCSSERIAL: %s\n",
-			   last_error());
-		return -1;
-        }
-
-        if (tcsetattr(fd, TCSAFLUSH, &attr) < 0)
-                return -1;
-
-        return fd;
-}
-#endif
-
 transport_t uif_open(const char *device, uif_type_t type)
 {
 	struct uif_transport *tr = malloc(sizeof(*tr));
@@ -127,22 +91,25 @@ transport_t uif_open(const char *device, uif_type_t type)
 	switch (type) {
 	case UIF_TYPE_FET:
 		printc("Trying to open UIF on %s...\n", device);
-		tr->serial_fd = sport_open(device, B460800, 0);
+		tr->serial_fd = sport_open(device, 460800, 0);
 		break;
 
 	case UIF_TYPE_OLIMEX:
-		printc("Trying to open Olimex on %s...\n", device);
-		tr->serial_fd = sport_open(device, B500000, 0);
+		printc("Trying to open Olimex (V2) on %s...\n", device);
+		tr->serial_fd = sport_open(device, 115200, 0);
+		if (sport_set_modem(tr->serial_fd, 0) < 0)
+			pr_error("warning: uif: failed to set "
+				 "modem control lines");
+		break;
+
+	case UIF_TYPE_OLIMEX_V1:
+		printc("Trying to open Olimex (V1) on %s...\n", device);
+		tr->serial_fd = sport_open(device, 500000, 0);
 		break;
 
 	case UIF_TYPE_OLIMEX_ISO:
-#if defined(__linux__)
 		printc("Trying to open Olimex (ISO) on %s...\n", device);
-		tr->serial_fd = open_olimex_iso(device);
-#else
-		printc_err("uif_open: ioctl TIOCSSERIAL not supported "
-			   "on this platform\n");
-#endif
+		tr->serial_fd = sport_open(device, 200000, 0);
 		break;
 	}
 

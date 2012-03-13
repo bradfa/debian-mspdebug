@@ -53,6 +53,8 @@ static struct simio_device *gpio_create(char **arg_text)
 {
 	struct gpio *g;
 
+	(void)arg_text;
+
 	g = malloc(sizeof(*g));
 	if (!g) {
 		pr_error("gpio: can't allocate memory");
@@ -146,7 +148,7 @@ static int config_channel(struct gpio *g, char **arg_text)
 		return -1;
 	}
 
-	if (which < 0 || which > 7) {
+	if (which > 7) {
 		printc_err("gpio: invalid pin number: %d\n", which);
 		return -1;
 	}

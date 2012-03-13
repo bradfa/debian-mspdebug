@@ -214,7 +214,7 @@ static int tracer_config(struct simio_device *dev,
 			return -1;
 		}
 
-		if (value < 0 || value >= 16) {
+		if (value >= 16) {
 			printc_err("tracer: trigger: invalid IRQ: %d\n",
 				   value);
 			return -1;
@@ -265,6 +265,8 @@ static int tracer_read(struct simio_device *dev,
 {
 	struct tracer *tr = (struct tracer *)dev;
 
+	(void)data;
+
 	event_rec(tr, EVENT_READ_16, addr, 0);
 	return 1;
 }
@@ -282,6 +284,8 @@ static int tracer_read_b(struct simio_device *dev,
 			 address_t addr, uint8_t *data)
 {
 	struct tracer *tr = (struct tracer *)dev;
+
+	(void)data;
 
 	event_rec(tr, EVENT_READ_8, addr, 0);
 	return 1;

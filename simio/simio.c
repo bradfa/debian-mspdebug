@@ -159,6 +159,8 @@ static int cmd_devices(char **arg_text)
 {
 	struct list_node *n;
 
+	(void)arg_text;
+
 	for (n = device_list.next; n != &device_list; n = n->next) {
 		struct simio_device *dev = (struct simio_device *)n;
 		int irq = -1;
@@ -180,6 +182,8 @@ static int cmd_classes(char **arg_text)
 {
 	struct vector v;
 	int i;
+
+	(void)arg_text;
 
 	vector_init(&v, sizeof(const char *));
 	for (i = 0; i < ARRAY_LEN(class_db); i++) {
@@ -333,15 +337,17 @@ int name(address_t addr, datatype data) { \
 \
 	return ret; \
 }
+#define IO_REQUEST_FUNC_S(name, method, datatype) \
+	static IO_REQUEST_FUNC(name, method, datatype)
 
 IO_REQUEST_FUNC(simio_write, write, uint16_t)
 IO_REQUEST_FUNC(simio_read, read, uint16_t *)
-IO_REQUEST_FUNC(static simio_write_b_device, write_b, uint8_t)
-IO_REQUEST_FUNC(static simio_read_b_device, read_b, uint8_t *)
+IO_REQUEST_FUNC_S(simio_write_b_device, write_b, uint8_t)
+IO_REQUEST_FUNC_S(simio_read_b_device, read_b, uint8_t *)
 
 int simio_write_b(address_t addr, uint8_t data)
 {
-	if (addr >= 0 && addr < 16) {
+	if (addr < 16) {
 		sfr_data[addr] = data;
 		return 0;
 	}
@@ -351,7 +357,7 @@ int simio_write_b(address_t addr, uint8_t data)
 
 int simio_read_b(address_t addr, uint8_t *data)
 {
-	if (addr >= 0 && addr < 16) {
+	if (addr < 16) {
 		*data = sfr_data[addr];
 		return 0;
 	}
@@ -425,7 +431,7 @@ void simio_step(uint16_t status_register, int cycles)
 
 uint8_t simio_sfr_get(address_t which)
 {
-	if (which < 0 || which > sizeof(sfr_data))
+	if (which > sizeof(sfr_data))
 		return 0;
 
 	return sfr_data[which];
@@ -433,7 +439,7 @@ uint8_t simio_sfr_get(address_t which)
 
 void simio_sfr_modify(address_t which, uint8_t mask, uint8_t bits)
 {
-	if (which < 0 || which > sizeof(sfr_data))
+	if (which > sizeof(sfr_data))
 		return;
 
 	sfr_data[which] = (sfr_data[which] & ~mask) | bits;
