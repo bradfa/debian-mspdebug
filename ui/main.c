@@ -51,6 +51,7 @@
 #include "olimex.h"
 #include "rf2500.h"
 #include "tilib.h"
+#include "goodfet.h"
 
 struct cmdline_args {
 	const char		*driver_name;
@@ -68,11 +69,12 @@ static const struct device_class *const driver_table[] = {
 	&device_bsl,
 	&device_flash_bsl,
 	&device_gdbc,
-	&device_tilib
+	&device_tilib,
+	&device_goodfet
 };
 
 static const char *version_text =
-"MSPDebug version 0.19 - debugging tool for MSP430 MCUs\n"
+"MSPDebug version 0.20 - debugging tool for MSP430 MCUs\n"
 "Copyright (C) 2009-2012 Daniel Beer <dlbeer@gmail.com>\n"
 "This is free software; see the source for copying conditions.  There is NO\n"
 "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR "
@@ -315,7 +317,7 @@ int setup_driver(struct cmdline_args *args)
 	return 0;
 }
 
-#ifdef WIN32
+#ifdef __Windows__
 static int sockets_init(void)
 {
 	WSADATA data;
@@ -361,6 +363,9 @@ int main(int argc, char **argv)
 		sockets_exit();
 		return -1;
 	}
+
+	if (device_probe_id(device_default) < 0)
+		printc_err("warning: device ID probe failed\n");
 
 	simio_init();
 

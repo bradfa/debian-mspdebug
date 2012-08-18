@@ -85,7 +85,7 @@ static int decode_00xx(const uint8_t *code, address_t len,
 		insn->dst_mode = MSP430_AMODE_REGISTER;
 		insn->dst_reg = op & 0xf;
 		insn->src_mode = MSP430_AMODE_IMMEDIATE;
-		insn->src_addr = (op >> 10) & 3;
+		insn->src_addr = 1 + ((op >> 10) & 3);
 		insn->dsize = (op & 0x0010) ?
 			MSP430_DSIZE_WORD : MSP430_DSIZE_AWORD;
 		return 2;
@@ -212,6 +212,7 @@ static int decode_13xx(const uint8_t *code, address_t len,
 	if (len < 4)
 		return -1;
 
+	insn->dsize = MSP430_DSIZE_AWORD;
 	insn->dst_addr |= code[2];
 	insn->dst_addr |= code[3] << 8;
 
@@ -229,7 +230,7 @@ static int decode_14xx(const uint8_t *code,
 	insn->dst_mode = MSP430_AMODE_REGISTER;
 	insn->dst_reg = op & 0xf;
 	insn->src_mode = MSP430_AMODE_IMMEDIATE;
-	insn->src_addr = (op >> 4) & 0xf;
+	insn->src_addr = 1 + ((op >> 4) & 0xf);
 	insn->dsize = (op & 0x0100) ?
 		MSP430_DSIZE_WORD : MSP430_DSIZE_AWORD;
 
@@ -783,7 +784,7 @@ int dis_decode(const uint8_t *code, address_t offset, address_t len,
 			insn->rep_index = ex_word & 0xf;
 		} else {
 			insn->dst_addr |= (ex_word & 0xf) << 16;
-			insn->src_addr |= ((ex_word >> 6) & 0xf) << 16;
+			insn->src_addr |= ((ex_word >> 7) & 0xf) << 16;
 		}
 
 		if (!(ex_word & 0x40))

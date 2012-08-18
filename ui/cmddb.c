@@ -62,6 +62,28 @@ const struct cmddb_record commands[] = {
 "    slot will be used.\n"
 	},
 	{
+		.name = "setwatch",
+		.func = cmd_setwatch,
+		.help =
+"setwatch <addr> [index]\n"
+"    Set a watchpoint. If no index is specified. the first available\n"
+"    slot will be used.\n"
+	},
+	{
+		.name = "setwatch_r",
+		.func = cmd_setwatch_r,
+		.help =
+"setwatch_r <addr> [index]\n"
+"    Set a read-only watchpoint.\n"
+	},
+	{
+		.name = "setwatch_w",
+		.func = cmd_setwatch_w,
+		.help =
+"setwatch_w <addr> [index]\n"
+"    Set a write-only watchpoint.\n"
+	},
+	{
 		.name = "delbreak",
 		.func = cmd_delbreak,
 		.help =
@@ -98,6 +120,13 @@ const struct cmddb_record commands[] = {
 "load <filename>\n"
 "    Flash the data contained in a binary file. Does not load symbols\n"
 "    or erase the device.\n"
+	},
+	{
+		.name = "verify",
+		.func = cmd_verify,
+		.help =
+"verify <filename>\n"
+"    Compare the contents of the given binary file to the device memory.\n"
 	},
 	{
 		.name = "md",
@@ -272,6 +301,13 @@ const struct cmddb_record commands[] = {
 "    Remove an alias definition.\n"
 "alias <name> <command>\n"
 "    Define a new alias.\n"
+	},
+	{
+		.name = "fill",
+		.func = cmd_fill,
+		.help =
+"fill <address> <length> <b0> [b1 b2 ...]\n"
+"    Fill the given memory range with a repeated byte sequence.\n"
 	}
 };
 

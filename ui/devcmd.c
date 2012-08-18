@@ -215,6 +215,7 @@ int cmd_run(char **arg)
 				&device_default->breakpoints[i];
 
 			if ((bp->flags & DEVICE_BP_ENABLED) &&
+			    bp->type == DEVICE_BPTYPE_BREAK &&
 			    bp->addr == regs[0])
 				break;
 		}
@@ -307,7 +308,7 @@ int cmd_dis(char **arg)
 				len_text);
 			return -1;
 		}
-	} else if (offset + length > 0x10000) {
+	} else if (offset < 0x10000 && offset + length > 0x10000) {
 		length = 0x10000 - offset;
 	}
 
@@ -533,7 +534,8 @@ static int do_cmd_prog(char **arg, int prog_flags)
 		return -1;
 	}
 
-	if (prog_flags && (binfile_info(in) & BINFILE_HAS_SYMS)) {
+	if ((prog_flags & PROG_WANT_ERASE) &&
+	    (binfile_info(in) & BINFILE_HAS_SYMS)) {
 		stab_clear();
 		binfile_syms(in);
 	}
@@ -543,7 +545,7 @@ static int do_cmd_prog(char **arg, int prog_flags)
 	if (prog_flush(&prog) < 0)
 		return -1;
 
-	printc("Done, %d bytes written\n", prog.total_written);
+	printc("Done, %d bytes total\n", prog.total_written);
 
 	if (device_ctl(DEVICE_CTL_RESET) < 0)
 		printc_err("warning: prog: "
@@ -563,7 +565,12 @@ int cmd_load(char **arg)
 	return do_cmd_prog(arg, 0);
 }
 
-int cmd_setbreak(char **arg)
+int cmd_verify(char **arg)
+{
+	return do_cmd_prog(arg, PROG_VERIFY);
+}
+
+static int do_setbreak(device_bptype_t type, char **arg)
 {
 	char *addr_text = get_arg(arg);
 	char *index_text = get_arg(arg);
@@ -585,14 +592,15 @@ int cmd_setbreak(char **arg)
 
 		if (expr_eval(index_text, &val) < 0 ||
 		    val >= device_default->max_breakpoints) {
-			printc("setbreak: invalid breakpoint slot: %d\n", val);
+			printc("setbreak: invalid breakpoint slot: %d\n",
+			       val);
 			return -1;
 		}
 
 		index = val;
 	}
 
-	index = device_setbrk(device_default, index, 1, addr);
+	index = device_setbrk(device_default, index, 1, addr, type);
 	if (index < 0) {
 		printc_err("setbreak: all breakpoint slots are "
 			"occupied\n");
@@ -601,6 +609,26 @@ int cmd_setbreak(char **arg)
 
 	printc("Set breakpoint %d\n", index);
 	return 0;
+}
+
+int cmd_setbreak(char **arg)
+{
+	return do_setbreak(DEVICE_BPTYPE_BREAK, arg);
+}
+
+int cmd_setwatch(char **arg)
+{
+	return do_setbreak(DEVICE_BPTYPE_WATCH, arg);
+}
+
+int cmd_setwatch_w(char **arg)
+{
+	return do_setbreak(DEVICE_BPTYPE_WRITE, arg);
+}
+
+int cmd_setwatch_r(char **arg)
+{
+	return do_setbreak(DEVICE_BPTYPE_READ, arg);
 }
 
 int cmd_delbreak(char **arg)
@@ -619,13 +647,13 @@ int cmd_delbreak(char **arg)
 		}
 
 		printc("Clearing breakpoint %d\n", index);
-		device_setbrk(device_default, index, 0, 0);
+		device_setbrk(device_default, index, 0, 0, 0);
 	} else {
 		int i;
 
 		printc("Clearing all breakpoints...\n");
 		for (i = 0; i < device_default->max_breakpoints; i++)
-			device_setbrk(device_default, i, 0, 0);
+			device_setbrk(device_default, i, 0, 0, 0);
 	}
 
 	return ret;
@@ -637,7 +665,8 @@ int cmd_break(char **arg)
 
 	(void)arg;
 
-	printc("%d breakpoints available:\n", device_default->max_breakpoints);
+	printc("%d breakpoints available:\n",
+	       device_default->max_breakpoints);
 	for (i = 0; i < device_default->max_breakpoints; i++) {
 		const struct device_breakpoint *bp =
 			&device_default->breakpoints[i];
@@ -646,7 +675,25 @@ int cmd_break(char **arg)
 			char name[128];
 
 			print_address(bp->addr, name, sizeof(name));
-			printc("    %d. %s\n", i, name);
+			printc("    %d. %s", i, name);
+
+			switch (bp->type) {
+			case DEVICE_BPTYPE_WATCH:
+				printc(" [watchpoint]\n");
+				break;
+
+			case DEVICE_BPTYPE_READ:
+				printc(" [read watchpoint]\n");
+				break;
+
+			case DEVICE_BPTYPE_WRITE:
+				printc(" [write watchpoint]\n");
+				break;
+
+			case DEVICE_BPTYPE_BREAK:
+				printc("\n");
+				break;
+			}
 		}
 	}
 
@@ -704,5 +751,66 @@ int cmd_locka(char **arg)
 	}
 
 	printc("LOCKA is %s\n", (regval[0] & FCTL3_LOCKA) ? "set" : "clear");
+	return 0;
+}
+
+int cmd_fill(char **arg)
+{
+	char *addr_text = get_arg(arg);
+	char *len_text = get_arg(arg);
+	char *byte_text;
+	address_t addr = 0;
+	address_t len = 0;
+	uint8_t buf[256];
+	int period = 0;
+	int phase = 0;
+	int i;
+
+	if (!(addr_text && len_text)) {
+		printc_err("fill: address and length must be supplied\n");
+		return -1;
+	}
+
+	if (expr_eval(addr_text, &addr) < 0) {
+		printc_err("fill: invalid address\n");
+		return -1;
+	}
+
+	if (expr_eval(len_text, &len) < 0) {
+		printc_err("fill: invalid length\n");
+		return -1;
+	}
+
+	while ((byte_text = get_arg(arg))) {
+		if (period >= sizeof(buf)) {
+			printc_err("fill: maximum length exceeded\n");
+			return -1;
+		}
+
+		buf[period++] = strtoul(byte_text, NULL, 16);
+	}
+
+	if (!period) {
+		printc_err("fill: no pattern supplied\n");
+		return -1;
+	}
+
+	for (i = period; i < sizeof(buf); i++)
+		buf[i] = buf[i % period];
+
+	while (len > 0) {
+		int plen = sizeof(buf) - phase;
+
+		if (plen > len)
+			plen = len;
+
+		if (device_writemem(addr, buf + phase, plen) < 0)
+			return -1;
+
+		addr += plen;
+		len -= plen;
+		phase = (phase + plen) % period;
+	}
+
 	return 0;
 }

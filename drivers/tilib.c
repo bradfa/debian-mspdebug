@@ -26,7 +26,7 @@
 #include "tilib_defs.h"
 #include "threads.h"
 
-#ifdef WIN32
+#if defined(__Windows__) || defined(__CYGWIN__)
 static const char tilib_filename[] = "MSP430.DLL";
 #else
 static const char tilib_filename[] = "libmsp430.so";
@@ -41,6 +41,8 @@ struct tilib_device {
 	uint32_t		mailbox;
 
 	uint16_t		bp_handles[DEVICE_MAX_BREAKPOINTS];
+
+	char			uifPath[1024];
 
 	/* MSP430.h */
 	STATUS_T WINAPI (*MSP430_Initialize)(char *port, long *version);
@@ -58,14 +60,18 @@ struct tilib_device {
 					long releaseJTAG);
 	STATUS_T WINAPI (*MSP430_Erase)(long type, long address, long length);
 	STATUS_T WINAPI (*MSP430_Error_Number)(void);
-	const char * WINAPI (*MSP430_Error_String)(long errNumber);
+	const char *WINAPI (*MSP430_Error_String)(long errNumber);
+
+	STATUS_T WINAPI (*MSP430_GetNumberOfUsbIfs)(long* number);
+	STATUS_T WINAPI (*MSP430_GetNameOfUsbIf)(long idx, char **name,
+						 long *status);
 
 	/* MSP430_Debug.h */
 	STATUS_T WINAPI (*MSP430_Registers)(long *registers, long mask,
 					    long rw);
 	STATUS_T WINAPI (*MSP430_Run)(long mode, long releaseJTAG);
-        STATUS_T WINAPI (*MSP430_State)(long* state, long stop,
-					long* pCPUCycles);
+	STATUS_T WINAPI (*MSP430_State)(long *state, long stop,
+					long *pCPUCycles);
 
 	/* MSP430_EEM.h */
 	STATUS_T WINAPI (*MSP430_EEM_Init)(DLL430_EVENTNOTIFY_FUNC callback,
@@ -184,6 +190,16 @@ static int get_all_funcs(struct tilib_device *dev)
 	if (!dev->MSP430_Error_String)
 		return -1;
 
+	dev->MSP430_GetNumberOfUsbIfs =
+		get_func(dev->hnd, "MSP430_GetNumberOfUsbIfs");
+	if (!dev->MSP430_GetNumberOfUsbIfs)
+		return -1;
+
+	dev->MSP430_GetNameOfUsbIf =
+		get_func(dev->hnd, "MSP430_GetNameOfUsbIf");
+	if (!dev->MSP430_GetNameOfUsbIf)
+		return -1;
+
 	dev->MSP430_Registers = get_func(dev->hnd, "MSP430_Registers");
 	if (!dev->MSP430_Registers)
 		return -1;
@@ -262,6 +278,9 @@ static int tilib_erase(device_t dev_base, device_erase_type_t type,
 {
 	struct tilib_device *dev = (struct tilib_device *)dev_base;
 
+	if (type == DEVICE_ERASE_MAIN)
+		address = 0xfffe;
+
 	if (dev->MSP430_Erase(ti_erase_type(type), address, 0) < 0) {
 		report_error(dev, "MSP430_Erase");
 		return -1;
@@ -304,6 +323,47 @@ static int tilib_setregs(device_t dev_base, const address_t *regs)
 	return 0;
 }
 
+static void load_break(BpParameter_t *param, address_t addr)
+{
+	param->bpMode = BP_CODE;
+	param->lAddrVal = addr;
+	param->bpType = BP_MAB;
+	param->lReg = 0; /* not used */
+	param->bpAccess = BP_FETCH;
+	param->bpAction = BP_BRK;
+	param->bpOperat = BP_EQUAL;
+	param->lMask = 0; /* what's this? */
+	param->lRangeEndAdVa = 0; /* not used */
+	param->bpRangeAction = 0; /* not used */
+	param->bpCondition = BP_NO_COND;
+	param->lCondMdbVal = 0;
+	param->bpCondAccess = BP_FETCH;
+	param->lCondMask = 0; /* what's this? */
+	param->bpCondOperat = BP_EQUAL;
+	param->wExtCombine = 0; /* not used? */
+}
+
+static void load_complex(BpParameter_t *param, address_t addr,
+			 BpAccess_t acc)
+{
+	param->bpMode = BP_COMPLEX;
+	param->lAddrVal = addr;
+	param->bpType = BP_MAB;
+	param->lReg = 0; /* not used (only for register-write) */
+	param->bpAccess = acc;
+	param->bpAction = BP_BRK;
+	param->bpOperat = BP_EQUAL;
+	param->lMask = 0xffffff;
+	param->lRangeEndAdVa = 0; /* not used */
+	param->bpRangeAction = 0; /* not used */
+	param->bpCondition = BP_NO_COND;
+	param->lCondMdbVal = 0;
+	param->bpCondAccess = acc;
+	param->lCondMask = 0; /* what's this? */
+	param->bpCondOperat = BP_EQUAL;
+	param->wExtCombine = 0; /* not used? */
+}
+
 static int refresh_bps(struct tilib_device *dev)
 {
 	int i;
@@ -316,22 +376,25 @@ static int refresh_bps(struct tilib_device *dev)
 			continue;
 
 		if (bp->flags & DEVICE_BP_ENABLED) {
-			param.bpMode = BP_CODE;
-			param.lAddrVal = bp->addr;
-			param.bpType = BP_MAB;
-			param.lReg = 0; /* not used */
-			param.bpAccess = BP_FETCH;
-			param.bpAction = BP_BRK;
-			param.bpOperat = BP_EQUAL;
-			param.lMask = 0; /* what's this? */
-			param.lRangeEndAdVa = 0; /* not used */
-			param.bpRangeAction = 0; /* not used */
-			param.bpCondition = BP_NO_COND;
-			param.lCondMdbVal = 0;
-			param.bpCondAccess = BP_FETCH;
-			param.lCondMask = 0; /* what's this? */
-			param.bpCondOperat = BP_EQUAL;
-			param.wExtCombine = 0; /* not used? */
+			switch (bp->type) {
+			case DEVICE_BPTYPE_BREAK:
+				load_break(&param, bp->addr);
+				break;
+
+			case DEVICE_BPTYPE_WATCH:
+				load_complex(&param, bp->addr, BP_NO_FETCH);
+				break;
+
+			case DEVICE_BPTYPE_READ:
+				load_complex(&param, bp->addr,
+					     BP_READ_DMA);
+				break;
+
+			case DEVICE_BPTYPE_WRITE:
+				load_complex(&param, bp->addr,
+					     BP_WRITE_DMA);
+				break;
+			}
 		} else {
 			param.bpMode = BP_CLEAR;
 		}
@@ -409,7 +472,7 @@ static device_status_t tilib_poll(device_t dev_base)
 	struct tilib_device *dev = (struct tilib_device *)dev_base;
 
         ctrlc_reset();
-        if ((usleep(50000) < 0) || ctrlc_check())
+        if ((delay_ms(50) < 0) || ctrlc_check())
                 return DEVICE_STATUS_INTR;
 
 	if (event_fetch(dev) & MID_HALT_ANY)
@@ -497,17 +560,10 @@ static int do_fw_update(struct tilib_device *dev, const char *filename)
 static int do_init(struct tilib_device *dev, const struct device_args *args)
 {
 	long version;
-	char buf[1024];
 	union DEVICE_T device;
 
-	/* Not sure if the path is actually modified by MSP430_Initialize,
-	 * but the argument isn't const, so probably safest to copy it.
-	 */
-	strncpy(buf, args->path, sizeof(buf));
-	buf[sizeof(buf) - 1] = 0;
-
-	printc_dbg("MSP430_Initialize: %s\n", buf);
-	if (dev->MSP430_Initialize(buf, &version) < 0) {
+	printc_dbg("MSP430_Initialize: %s\n", dev->uifPath);
+	if (dev->MSP430_Initialize(dev->uifPath, &version) < 0) {
 		report_error(dev, "MSP430_Initialize");
 		return -1;
 	}
@@ -546,7 +602,7 @@ static int do_init(struct tilib_device *dev, const struct device_args *args)
 	}
 
 	/* Without this delay, MSP430_OpenDevice will often hang. */
-	usleep(1000000);
+	delay_s(1);
 
 	printc_dbg("MSP430_OpenDevice\n");
 	if (dev->MSP430_OpenDevice("DEVICE_UNKNOWN", "", 0, 0, 0) < 0) {
@@ -582,14 +638,46 @@ static int do_init(struct tilib_device *dev, const struct device_args *args)
 	return 0;
 }
 
+static int do_findUif(struct tilib_device *dev)
+{
+	// Find the first uif and store the path name into dev->uifPath
+	long attachedUifCount = 0;
+	long uifIndex = 0;
+
+	printc_dbg("MSP430_GetNumberOfUsbIfs\n");
+	if (dev->MSP430_GetNumberOfUsbIfs(&attachedUifCount) < 0) {
+		report_error(dev, "MSP430_GetNumberOfUsbIfs");
+		return -1;
+	}
+
+	for (uifIndex = 0; uifIndex < attachedUifCount; uifIndex++)
+	{
+		char *name = NULL;
+		long status = 0;
+
+		printc_dbg("MSP430_GetNameOfUsbIf\n");
+		if (dev->MSP430_GetNameOfUsbIf(uifIndex, &name, &status) < 0) {
+			report_error(dev, "MSP430_GetNameOfUsbIf");
+			return -1;
+		}
+
+		if (status == 0) /* status == 1 when fet is in use */
+		{
+			// This fet is unused
+			strncpy(dev->uifPath, name, sizeof(dev->uifPath));
+			printc_dbg("Found FET: %s\n", dev->uifPath);
+			return 0;
+		}
+	}
+
+	printc_err("No unused FET found.\n");
+
+	return -1;
+}
+
 static device_t tilib_open(const struct device_args *args)
 {
 	struct tilib_device *dev;
-
-	if (!(args->flags & DEVICE_FLAG_TTY)) {
-		printc_err("This driver does not support raw USB access.\n");
-		return NULL;
-	}
 
 	dev = malloc(sizeof(*dev));
 	if (!dev) {
@@ -613,6 +701,24 @@ static device_t tilib_open(const struct device_args *args)
 		dynload_close(dev->hnd);
 		free(dev);
 		return NULL;
+	}
+
+	/* Copy the args->path to the dev->uifPath buffer
+	 * we may need to change it for automatic detection, and
+	 * not sure if the path is actually modified by MSP430_Initialize,
+	 * but the argument isn't const, so probably safest to copy it.
+	 */
+
+	if ((args->flags & DEVICE_FLAG_TTY)) {
+		strncpy(dev->uifPath, args->path, sizeof(dev->uifPath));
+		dev->uifPath[sizeof(dev->uifPath) - 1] = 0;
+	} else {
+		// No path was supplied, use the first UIF we can find
+		if (do_findUif(dev) < 0) {
+			dynload_close(dev->hnd);
+			free(dev);
+			return NULL;
+		}
 	}
 
 	if (do_init(dev, args) < 0) {

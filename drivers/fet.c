@@ -559,7 +559,37 @@ static int identify_new(struct fet_device *dev, const char *force_id)
 	}
 
 	dev->code_start = LE_WORD(r->msg29_data, 0);
-	dev->base.max_breakpoints = LE_WORD(r->msg29_data, 0x14);
+	dev->base.max_breakpoints = r->msg29_data[0x14];
+
+	printc_dbg("  Code start address: 0x%x\n",
+		   LE_WORD(r->msg29_data, 0));
+	/*
+	 * The value at 0x02 seems to contain a "virtual code end
+	 * address". So this value seems to be useful only for
+	 * calculating the total ROM size.
+	 *
+	 * For example, as for the msp430f6736 with 128kb ROM, the ROM
+	 * is split into two areas: A "near" ROM, and a "far ROM".
+	 */
+	const uint32_t codeSize =
+	  LE_LONG(r->msg29_data, 0x02)
+	  - LE_WORD(r->msg29_data, 0)
+	  + 1;
+	printc_dbg("  Code size         : %lu byte = %lu kb\n",
+		   codeSize,
+		   codeSize / 1024);
+
+	printc_dbg("  RAM  start address: 0x%x\n",
+		   LE_WORD(r->msg29_data, 0x0c));
+	printc_dbg("  RAM  end   address: 0x%x\n",
+		   LE_WORD(r->msg29_data, 0x0e));
+	const uint16_t ramSize =
+	  LE_WORD(r->msg29_data, 0x0e)
+	  - LE_WORD(r->msg29_data, 0x0c)
+	  + 1;
+	printc_dbg("  RAM  size         : %u byte = %u kb\n",
+		   ramSize,
+		   ramSize / 1024);
 
 	show_dev_info(r->name, dev);
 
@@ -572,12 +602,6 @@ static int identify_new(struct fet_device *dev, const char *force_id)
 		printc_err("fet: message C_IDENT2 failed\n");
 		return -1;
 	}
-
-	/* This packet seems to be necessary in order to program on the
-	 * MSP430FR5739 development board.
-	 */
-	if (xfer(dev, 0x30, NULL, 0, 0) < 0)
-		printc_dbg("fet: warning: message 0x30 failed\n");
 
 	return 0;
 }
@@ -652,7 +676,7 @@ static device_status_t fet_poll(device_t dev_base)
 	struct fet_device *dev = (struct fet_device *)dev_base;
 
 	ctrlc_reset();
-	if ((usleep(50000) < 0) || ctrlc_check())
+	if ((delay_ms(50) < 0) || ctrlc_check())
 		return DEVICE_STATUS_INTR;
 
 	if (xfer(dev, C_STATE, NULL, 0, 1, 0) < 0) {
@@ -674,13 +698,15 @@ static int refresh_bps(struct fet_device *dev)
 	for (i = 0; i < dev->base.max_breakpoints; i++) {
 		struct device_breakpoint *bp = &dev->base.breakpoints[i];
 
-		if (bp->flags & DEVICE_BP_DIRTY) {
+		if ((bp->flags & DEVICE_BP_DIRTY) &&
+		    bp->type == DEVICE_BPTYPE_BREAK) {
 			uint16_t addr = bp->addr;
 
 			if (!(bp->flags & DEVICE_BP_ENABLED))
 				addr = 0;
 
-			if (xfer(dev, C_BREAKPOINT, NULL, 0, 2, i, addr) < 0) {
+			if (xfer(dev, C_BREAKPOINT, NULL, 0,
+				 2, i, addr) < 0) {
 				printc_err("fet: failed to refresh "
 					"breakpoint #%d\n", i);
 				ret = -1;
@@ -742,7 +768,15 @@ static void fet_destroy(device_t dev_base)
 {
 	struct fet_device *dev = (struct fet_device *)dev_base;
 
-	if (xfer(dev, C_RESET, NULL, 0, 3, FET_RESET_ALL, 1, 1) < 0)
+	/* The second argument to C_RESET is a boolean which specifies
+	 * whether the chip should run or not. The final argument is
+	 * also a boolean. Setting it non-zero is required to get the
+	 * RST pin working on the G2231, but it must be zero on the
+	 * FR5739, or else the value of the reset vector gets set to
+	 * 0xffff at the start of the next JTAG session.
+	 */
+	if (xfer(dev, C_RESET, NULL, 0, 3, FET_RESET_ALL, 1,
+		 !device_is_fram(dev_base)) < 0)
 		printc_err("fet: final reset failed\n");
 
 	if (xfer(dev, C_CLOSE, NULL, 0, 1, 0) < 0)
@@ -968,9 +1002,9 @@ int try_open(struct fet_device *dev, const struct device_args *args,
 	if (dev->flags & FET_PROTO_NOLEAD_SEND) {
 		printc("Resetting Olimex command processor...\n");
 		transport->send(dev->transport, (const uint8_t *)"\x7e", 1);
-		usleep(5000);
+		delay_ms(5);
 		transport->send(dev->transport, (const uint8_t *)"\x7e", 1);
-		usleep(5000);
+		delay_ms(5);
 	}
 
 	printc_dbg("Initializing FET...\n");
@@ -1030,7 +1064,7 @@ static device_t fet_open(const struct device_args *args,
 	dev->flags = flags;
 
 	if (try_open(dev, args, flags & FET_PROTO_FORCE_RESET) < 0) {
-		usleep(500000);
+		delay_ms(500);
 		printc("Trying again...\n");
 		if (try_open(dev, args, 1) < 0)
 			goto fail;

@@ -38,6 +38,8 @@ struct sim_device {
 
 	int                     running;
 	uint16_t                current_insn;
+
+	int			watchpoint_hit;
 };
 
 #define MEM_GETB(dev, offset) ((dev)->memory[offset])
@@ -50,6 +52,26 @@ struct sim_device {
 		(dev)->memory[offset & ~1] = (value) & 0xff;			\
 		(dev)->memory[offset | 1] = (value) >> 8;	\
 	} while (0);
+
+static void watchpoint_check(struct sim_device *dev, uint16_t addr,
+			     int is_write)
+{
+	int i;
+
+	for (i = 0; i < DEVICE_MAX_BREAKPOINTS; i++) {
+		const struct device_breakpoint *bp =
+			&dev->base.breakpoints[i];
+
+		if ((bp->flags & DEVICE_BP_ENABLED) &&
+		    (bp->addr == addr) &&
+		    ((bp->type == DEVICE_BPTYPE_WATCH ||
+		      (bp->type == DEVICE_BPTYPE_READ && !is_write) ||
+		      (bp->type == DEVICE_BPTYPE_WRITE && is_write)))) {
+			dev->watchpoint_hit = 1;
+			return;
+		}
+	}
+}
 
 static int fetch_operand(struct sim_device *dev,
 			 int amode, int reg, int is_byte,
@@ -118,6 +140,8 @@ static int fetch_operand(struct sim_device *dev,
 		*addr_ret = addr;
 
 	if (data_ret) {
+		watchpoint_check(dev, addr, 0);
+
 		*data_ret = MEM_GETW(dev, addr) & mask;
 
 		if (addr < MEM_IO_END) {
@@ -146,14 +170,19 @@ static int store_operand(struct sim_device *dev,
 			 int amode, int reg, int is_byte,
 			 uint16_t addr, uint16_t data)
 {
+	if (amode == MSP430_AMODE_REGISTER) {
+		dev->regs[reg] = data;
+		return 0;
+	}
+
+	watchpoint_check(dev, addr, 1);
+
 	if (is_byte)
 		MEM_SETB(dev, addr, data);
 	else
 		MEM_SETW(dev, addr, data);
 
-	if (amode == MSP430_AMODE_REGISTER)
-		dev->regs[reg] = data;
-	else if (addr < MEM_IO_END) {
+	if (addr < MEM_IO_END) {
 		if (is_byte)
 			return simio_write_b(addr, data);
 
@@ -694,6 +723,7 @@ static device_status_t sim_poll(device_t dev_base)
 		return DEVICE_STATUS_HALTED;
 
 	ctrlc_reset();
+	dev->watchpoint_hit = 0;
 	while (count > 0) {
 		int i;
 
@@ -702,6 +732,7 @@ static device_status_t sim_poll(device_t dev_base)
 				&dev->base.breakpoints[i];
 
 			if ((bp->flags & DEVICE_BP_ENABLED) &&
+			    (bp->type == DEVICE_BPTYPE_BREAK) &&
 			    dev->regs[MSP430_REG_PC] == bp->addr) {
 				dev->running = 0;
 				return DEVICE_STATUS_HALTED;
@@ -711,6 +742,11 @@ static device_status_t sim_poll(device_t dev_base)
 		if (step_system(dev) < 0) {
 			dev->running = 0;
 			return DEVICE_STATUS_ERROR;
+		}
+
+		if (dev->watchpoint_hit) {
+			dev->running = 0;
+			return DEVICE_STATUS_HALTED;
 		}
 
 		if (ctrlc_check())

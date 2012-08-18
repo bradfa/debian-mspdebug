@@ -51,9 +51,17 @@ typedef enum {
 #define DEVICE_BP_ENABLED       0x01
 #define DEVICE_BP_DIRTY         0x02
 
+typedef enum {
+	DEVICE_BPTYPE_BREAK,
+	DEVICE_BPTYPE_WATCH,
+	DEVICE_BPTYPE_READ,
+	DEVICE_BPTYPE_WRITE
+} device_bptype_t;
+
 struct device_breakpoint {
-	address_t      addr;
-	int            flags;
+	device_bptype_t		type;
+	address_t		addr;
+	int			flags;
 };
 
 #define DEVICE_FLAG_JTAG	0x01 /* default is SBW */
@@ -105,6 +113,8 @@ struct device_class {
 struct device {
 	const struct device_class	*type;
 
+	uint8_t				dev_id[3];
+
 	/* Breakpoint table. This should not be modified directly.
 	 * Instead, you should use the device_setbrk() helper function. This
 	 * will set the appropriate flags and ensure that the breakpoint is
@@ -114,6 +124,16 @@ struct device {
 	struct device_breakpoint breakpoints[DEVICE_MAX_BREAKPOINTS];
 };
 
+/* Probe the device memory and extract ID bytes. This should be called
+ * after the device structure is ready.
+ */
+int device_probe_id(device_t dev);
+
+/* Determine, from the device ID bytes, whether this chip is an FRAM or
+ * flash-based device.
+ */
+int device_is_fram(device_t dev);
+
 /* Set or clear a breakpoint. The index of the modified entry is
  * returned, or -1 if no free entries were available. The modified
  * entry is flagged so that it will be reloaded on the next run.
@@ -122,7 +142,8 @@ struct device {
  * modified. Otherwise, if which < 0, breakpoint slots are selected
  * automatically.
  */
-int device_setbrk(device_t dev, int which, int enabled, address_t address);
+int device_setbrk(device_t dev, int which, int enabled, address_t address,
+		  device_bptype_t type);
 
 extern device_t device_default;
 
@@ -132,8 +153,6 @@ extern device_t device_default;
 	device_default->type->readmem(device_default, addr, mem, len)
 #define device_writemem(addr, mem, len) \
 	device_default->type->writemem(device_default, addr, mem, len)
-#define device_erase(et, addr) \
-	device_default->type->erase(device_default, et, addr)
 #define device_getregs(regs) \
 	device_default->type->getregs(device_default, regs)
 #define device_setregs(regs) \
@@ -142,5 +161,7 @@ extern device_t device_default;
 	device_default->type->ctl(device_default, op)
 #define device_poll() \
 	device_default->type->poll(device_default)
+
+int device_erase(device_erase_type_t et, address_t addr);
 
 #endif
