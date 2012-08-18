@@ -1,5 +1,5 @@
 /* MSPDebug - debugging tool for MSP430 MCUs
- * Copyright (C) 2009, 2010 Daniel Beer
+ * Copyright (C) 2009-2012 Daniel Beer
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,31 +16,10 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef PROG_H_
-#define PROG_H_
+#ifndef DEMANGLE_H_
+#define DEMANGLE_H_
 
-#include "binfile.h"
-
-#define PROG_BUFSIZE    4096
-
-struct prog_data {
-	char		section[64];
-
-	uint8_t         buf[PROG_BUFSIZE];
-	address_t       addr;
-	int             len;
-
-	int		flags;
-	int             have_erased;
-
-	address_t	total_written;
-};
-
-#define PROG_WANT_ERASE		0x01
-#define PROG_VERIFY		0x02
-
-void prog_init(struct prog_data *data, int flags);
-int prog_feed(struct prog_data *data, const struct binfile_chunk *ch);
-int prog_flush(struct prog_data *data);
+/* Demangle a function name into the buffer "out". */
+int demangle(const char *raw, char *out, size_t max_len);
 
 #endif

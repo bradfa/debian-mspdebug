@@ -24,15 +24,16 @@
 #include <unistd.h>
 #include <signal.h>
 #include <assert.h>
+#include <time.h>
 
-#ifdef WIN32
+#ifdef __Windows__
 #include <windows.h>
 #endif
 
 #include "util.h"
 #include "output.h"
 
-#ifdef WIN32
+#ifdef __Windows__
 static int ctrlc_flag;
 static HANDLE ctrlc_event;
 static CRITICAL_SECTION ctrlc_cs;
@@ -87,7 +88,7 @@ HANDLE ctrlc_win32_event(void)
 {
 	return ctrlc_event;
 }
-#else /* WIN32 */
+#else /* __Windows__ */
 static volatile int ctrlc_flag;
 
 static void sigint_handler(int signum)
@@ -99,7 +100,7 @@ static void sigint_handler(int signum)
 
 void ctrlc_init(void)
 {
-#if defined(__CYGWIN__)
+#ifdef __CYGWIN__
        signal(SIGINT, sigint_handler);
 #else
        static const struct sigaction siga = {
@@ -262,7 +263,7 @@ int hexval(int c)
 	return 0;
 }
 
-#ifdef WIN32
+#ifdef __Windows__
 char *strsep(char **strp, const char *delim)
 {
 	char *start = *strp;
@@ -292,7 +293,7 @@ char *strsep(char **strp, const char *delim)
 }
 #endif
 
-#ifdef WIN32
+#ifdef __Windows__
 const char *last_error(void)
 {
 	DWORD err = GetLastError();
@@ -360,3 +361,34 @@ char *expand_tilde(const char *path)
 	/* Caller must free()! */
 	return expanded;
 }
+
+#ifdef __Windows__
+int delay_s(unsigned int s)
+{
+	Sleep(s * 1000);
+
+	return 0;
+}
+
+int delay_ms(unsigned int s)
+{
+	Sleep(s);
+
+	return 0;
+}
+#else
+int delay_s(unsigned int s)
+{
+	return sleep(s);
+}
+
+int delay_ms(unsigned int s)
+{
+	struct timespec ts;
+
+	ts.tv_sec = s / 1000;
+	ts.tv_nsec = (s % 1000) * 1000000;
+
+	return nanosleep(&ts, NULL);
+}
+#endif

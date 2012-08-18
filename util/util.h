@@ -22,7 +22,7 @@
 #include <stdint.h>
 #include <ctype.h>
 
-#ifdef WIN32
+#ifdef __Windows__
 #include <windows.h>
 #endif
 
@@ -60,7 +60,7 @@ static inline int ishex(int c)
 
 int hexval(int c);
 
-#ifdef WIN32
+#ifdef __Windows__
 char *strsep(char **strp, const char *delim);
 
 HANDLE ctrlc_win32_event(void);
@@ -68,5 +68,9 @@ HANDLE ctrlc_win32_event(void);
 
 /* Expand `~' in path names. Caller must free the returned ptr */
 char *expand_tilde(const char *path);
+
+/* Sleep for a number of seconds (_s) or milliseconds (_ms) */
+int delay_s(unsigned int s);
+int delay_ms(unsigned int s);
 
 #endif
