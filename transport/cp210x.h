@@ -1,5 +1,6 @@
 /* MSPDebug - debugging tool for MSP430 MCUs
- * Copyright (C) 2009, 2010 Daniel Beer
+ * Copyright (C) 2009-2012 Daniel Beer
+ * Copyright (C) 2010 Peter Jansen
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -16,22 +17,17 @@
  * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#ifndef UIF_H_
-#define UIF_H_
+#ifndef CP210X_H_
+#define CP210X_H_
 
 #include "transport.h"
 
-typedef enum {
-	UIF_TYPE_FET,
-	UIF_TYPE_OLIMEX,
-	UIF_TYPE_OLIMEX_V1,
-	UIF_TYPE_OLIMEX_ISO
-} uif_type_t;
-
-/* This function is for opening an eZ430-F2013 or FET430UIF device via
- * a kernel-supported serial interface. The argument given should be the
- * filename of the relevant tty device.
+/* Search the USB bus for the first CP210x device, and initialize it. If
+ * successful, a valid transport is returned.
+ *
+ * A particular USB device may be specified in bus:dev form.
  */
-transport_t uif_open(const char *device, uif_type_t type);
+transport_t cp210x_open(const char *usb_device, const char *requested_serial,
+			int baud_rate, uint16_t product, uint16_t vendor);
 
 #endif

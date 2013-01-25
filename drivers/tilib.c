@@ -24,12 +24,15 @@
 #include "dynload.h"
 #include "tilib.h"
 #include "tilib_defs.h"
-#include "threads.h"
+#include "thread.h"
+#include "ctrlc.h"
 
 #if defined(__Windows__) || defined(__CYGWIN__)
 static const char tilib_filename[] = "MSP430.DLL";
+#define TIDLL __stdcall
 #else
 static const char tilib_filename[] = "libmsp430.so";
+#define TIDLL
 #endif
 
 struct tilib_device {
@@ -37,7 +40,7 @@ struct tilib_device {
 
 	dynload_handle_t	hnd;
 
-	threads_lock_t		mb_lock;
+	thread_lock_t		mb_lock;
 	uint32_t		mailbox;
 
 	uint16_t		bp_handles[DEVICE_MAX_BREAKPOINTS];
@@ -45,43 +48,43 @@ struct tilib_device {
 	char			uifPath[1024];
 
 	/* MSP430.h */
-	STATUS_T WINAPI (*MSP430_Initialize)(char *port, long *version);
-	STATUS_T WINAPI (*MSP430_VCC)(long voltage);
-	STATUS_T WINAPI (*MSP430_Configure)(long mode, long value);
-	STATUS_T WINAPI (*MSP430_OpenDevice)(char *Device, char *Password,
+	STATUS_T TIDLL (*MSP430_Initialize)(char *port, long *version);
+	STATUS_T TIDLL (*MSP430_VCC)(long voltage);
+	STATUS_T TIDLL (*MSP430_Configure)(long mode, long value);
+	STATUS_T TIDLL (*MSP430_OpenDevice)(char *Device, char *Password,
 					     long PwLength, long DeviceCode,
 					     long setId);
-	STATUS_T WINAPI (*MSP430_GetFoundDevice)(char *FoundDevice,
+	STATUS_T TIDLL (*MSP430_GetFoundDevice)(char *FoundDevice,
 						 long count);
-	STATUS_T WINAPI (*MSP430_Close)(long vccOff);
-	STATUS_T WINAPI (*MSP430_Memory)(long address, char *buffer,
+	STATUS_T TIDLL (*MSP430_Close)(long vccOff);
+	STATUS_T TIDLL (*MSP430_Memory)(long address, char *buffer,
 					 long count, long rw);
-	STATUS_T WINAPI (*MSP430_Reset)(long method, long execute,
+	STATUS_T TIDLL (*MSP430_Reset)(long method, long execute,
 					long releaseJTAG);
-	STATUS_T WINAPI (*MSP430_Erase)(long type, long address, long length);
-	STATUS_T WINAPI (*MSP430_Error_Number)(void);
-	const char *WINAPI (*MSP430_Error_String)(long errNumber);
+	STATUS_T TIDLL (*MSP430_Erase)(long type, long address, long length);
+	STATUS_T TIDLL (*MSP430_Error_Number)(void);
+	const char *TIDLL (*MSP430_Error_String)(long errNumber);
 
-	STATUS_T WINAPI (*MSP430_GetNumberOfUsbIfs)(long* number);
-	STATUS_T WINAPI (*MSP430_GetNameOfUsbIf)(long idx, char **name,
+	STATUS_T TIDLL (*MSP430_GetNumberOfUsbIfs)(long* number);
+	STATUS_T TIDLL (*MSP430_GetNameOfUsbIf)(long idx, char **name,
 						 long *status);
 
 	/* MSP430_Debug.h */
-	STATUS_T WINAPI (*MSP430_Registers)(long *registers, long mask,
+	STATUS_T TIDLL (*MSP430_Registers)(long *registers, long mask,
 					    long rw);
-	STATUS_T WINAPI (*MSP430_Run)(long mode, long releaseJTAG);
-	STATUS_T WINAPI (*MSP430_State)(long *state, long stop,
+	STATUS_T TIDLL (*MSP430_Run)(long mode, long releaseJTAG);
+	STATUS_T TIDLL (*MSP430_State)(long *state, long stop,
 					long *pCPUCycles);
 
 	/* MSP430_EEM.h */
-	STATUS_T WINAPI (*MSP430_EEM_Init)(DLL430_EVENTNOTIFY_FUNC callback,
+	STATUS_T TIDLL (*MSP430_EEM_Init)(DLL430_EVENTNOTIFY_FUNC callback,
 					   long clientHandle,
 					   MessageID_t *pMsgIdBuffer);
-	STATUS_T WINAPI (*MSP430_EEM_SetBreakpoint)(uint16_t *pwBpHandle,
+	STATUS_T TIDLL (*MSP430_EEM_SetBreakpoint)(uint16_t *pwBpHandle,
 						    BpParameter_t *pBpBuffer);
 
 	/* MSP430_FET.h */
-	STATUS_T WINAPI (*MSP430_FET_FwUpdate)(char* lpszFileName,
+	STATUS_T TIDLL (*MSP430_FET_FwUpdate)(char* lpszFileName,
 					   DLL430_FET_NOTIFY_FUNC callback,
 					   long clientHandle);
 
@@ -113,19 +116,19 @@ static void event_notify(unsigned int msg_id, unsigned int w_param,
 	(void)w_param;
 	(void)l_param;
 
-	threads_lock_acquire(&dev->mb_lock);
+	thread_lock_acquire(&dev->mb_lock);
 	dev->mailbox |= msg_id;
-	threads_lock_release(&dev->mb_lock);
+	thread_lock_release(&dev->mb_lock);
 }
 
 static uint32_t event_fetch(struct tilib_device *dev)
 {
 	uint32_t ret;
 
-	threads_lock_acquire(&dev->mb_lock);
+	thread_lock_acquire(&dev->mb_lock);
 	ret = dev->mailbox;
 	dev->mailbox = 0;
-	threads_lock_release(&dev->mb_lock);
+	thread_lock_release(&dev->mb_lock);
 
 	return ret;
 }
@@ -233,7 +236,7 @@ static void report_error(struct tilib_device *dev, const char *what)
 	long err = dev->MSP430_Error_Number();
 	const char *desc = dev->MSP430_Error_String(err);
 
-	printc_err("tilib: %s: %s (error = %d)\n", what, desc, err);
+	printc_err("tilib: %s: %s (error = %ld)\n", what, desc, err);
 }
 
 static int tilib_readmem(device_t dev_base, address_t addr,
@@ -395,6 +398,9 @@ static int refresh_bps(struct tilib_device *dev)
 					     BP_WRITE_DMA);
 				break;
 			}
+		} else if (!dev->bp_handles[i]) {
+			bp->flags &= ~DEVICE_BP_DIRTY;
+			continue;
 		} else {
 			param.bpMode = BP_CLEAR;
 		}
@@ -471,7 +477,6 @@ static device_status_t tilib_poll(device_t dev_base)
 {
 	struct tilib_device *dev = (struct tilib_device *)dev_base;
 
-        ctrlc_reset();
         if ((delay_ms(50) < 0) || ctrlc_check())
                 return DEVICE_STATUS_INTR;
 
@@ -492,7 +497,7 @@ static void tilib_destroy(device_t dev_base)
 	printc_dbg("MSP430_Close\n");
 	dev->MSP430_Close(0);
 	dynload_close(dev->hnd);
-	threads_lock_destroy(&dev->mb_lock);
+	thread_lock_destroy(&dev->mb_lock);
 	free(dev);
 }
 
@@ -508,7 +513,7 @@ static void fw_progress(unsigned int msg_id, unsigned long w_param,
 		if (w_param > 100)
 			w_param = 100;
 
-		printc("   %3d percent done\n", w_param);
+		printc("   %3lu percent done\n", w_param);
 		break;
 
 	case BL_UPDATE_ERROR:
@@ -591,7 +596,7 @@ static int do_init(struct tilib_device *dev, const struct device_args *args)
 			return -1;
 		}
 	} else {
-		printc_dbg("Firmware version is %d\n", version);
+		printc_dbg("Firmware version is %ld\n", version);
 	}
 
 	printc_dbg("MSP430_VCC: %d mV\n", args->vcc_mv);
@@ -626,12 +631,12 @@ static int do_init(struct tilib_device *dev, const struct device_args *args)
 		dev->base.max_breakpoints = DEVICE_MAX_BREAKPOINTS;
 
 	printc_dbg("MSP430_EEM_Init\n");
-	threads_lock_init(&dev->mb_lock);
+	thread_lock_init(&dev->mb_lock);
 	if (dev->MSP430_EEM_Init(event_notify, (long)dev,
 				 (MessageID_t *)&my_message_ids) < 0) {
 		report_error(dev, "MSP430_EEM_Init");
 		dev->MSP430_Close(0);
-		threads_lock_destroy(&dev->mb_lock);
+		thread_lock_destroy(&dev->mb_lock);
 		return -1;
 	}
 

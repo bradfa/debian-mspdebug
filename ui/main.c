@@ -37,25 +37,30 @@
 #include "opdb.h"
 #include "reader.h"
 #include "output.h"
+#include "output_util.h"
 #include "simio.h"
+#include "ctrlc.h"
 
 #include "sim.h"
 #include "bsl.h"
 #include "fet.h"
 #include "vector.h"
 #include "fet_db.h"
+#include "fet_olimex_db.h"
 #include "flash_bsl.h"
 #include "gdbc.h"
-
-#include "uif.h"
-#include "olimex.h"
-#include "rf2500.h"
 #include "tilib.h"
 #include "goodfet.h"
+#include "input.h"
+#include "input_async.h"
+#include "pif.h"
+
+#define OPT_NO_RC		0x01
+#define OPT_EMBEDDED		0x02
 
 struct cmdline_args {
 	const char		*driver_name;
-	int			no_rc;
+	int			flags;
 	struct device_args	devarg;
 };
 
@@ -64,17 +69,19 @@ static const struct device_class *const driver_table[] = {
 	&device_olimex,
 	&device_olimex_v1,
 	&device_olimex_iso,
+	&device_olimex_iso_mk2,
 	&device_sim,
 	&device_uif,
 	&device_bsl,
 	&device_flash_bsl,
 	&device_gdbc,
 	&device_tilib,
-	&device_goodfet
+	&device_goodfet,
+	&device_pif
 };
 
 static const char *version_text =
-"MSPDebug version 0.20 - debugging tool for MSP430 MCUs\n"
+"MSPDebug version 0.21 - debugging tool for MSP430 MCUs\n"
 "Copyright (C) 2009-2012 Daniel Beer <dlbeer@gmail.com>\n"
 "This is free software; see the source for copying conditions.  There is NO\n"
 "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR "
@@ -115,10 +122,12 @@ static void usage(const char *progname)
 "    --allow-fw-update\n"
 "        Update FET firmware (tilib only) if necessary.\n"
 "    --require-fw-update <image.txt>\n"
-"        Require FET firmware update (tilib only). The image must be\n"
-"        a TI Text file.\n"
+"        Require FET firmware update. The required image format depends\n"
+"        on the driver.\n"
 "    --version\n"
 "        Show copyright and version information.\n"
+"    --embedded\n"
+"        Run in embedded mode.\n"
 "\n"
 "Most drivers connect by default via USB, unless told otherwise via the\n"
 "-d option. By default, the first USB device found is opened.\n"
@@ -155,6 +164,13 @@ static int add_fet_device(void *user_data, const struct fet_db_record *r)
 	return vector_push(v, &r->name, 1);
 }
 
+static int add_fet_olimex_device(void *user_data, const char *name)
+{
+	struct vector *v = (struct vector *)user_data;
+
+	return vector_push(v, &name, 1);
+}
+
 static int list_devices(void)
 {
 	struct vector v;
@@ -167,6 +183,18 @@ static int list_devices(void)
 	}
 
 	printc("Devices supported by FET driver:\n");
+	namelist_print(&v);
+	vector_destroy(&v);
+
+	vector_init(&v, sizeof(const char *));
+	if (fet_olimex_db_enum(add_fet_olimex_device, &v) < 0) {
+		pr_error("couldn't allocate memory");
+		vector_destroy(&v);
+		return -1;
+	}
+
+	printc("\n");
+	printc("Devices supported by Olimex FET driver:\n");
 	namelist_print(&v);
 	vector_destroy(&v);
 
@@ -187,6 +215,7 @@ static int parse_cmdline_args(int argc, char **argv,
 		{"force-reset",		0, 0, 'R'},
 		{"allow-fw-update",	0, 0, 'A'},
 		{"require-fw-update",	1, 0, 'M'},
+		{"embedded",		0, 0, 'E'},
 		{NULL, 0, 0, 0}
 	};
 	int want_usb = 0;
@@ -202,6 +231,10 @@ static int parse_cmdline_args(int argc, char **argv,
 
 				opdb_set("quiet", &v);
 			}
+			break;
+
+		case 'E':
+			args->flags |= OPT_EMBEDDED;
 			break;
 
 		case 'A':
@@ -257,7 +290,7 @@ static int parse_cmdline_args(int argc, char **argv,
 			break;
 
 		case 'n':
-			args->no_rc = 1;
+			args->flags |= OPT_NO_RC;
 			break;
 
 		case 'P':
@@ -353,15 +386,24 @@ int main(int argc, char **argv)
 	args.devarg.vcc_mv = 3000;
 	args.devarg.requested_serial = NULL;
 	if (parse_cmdline_args(argc, argv, &args) < 0)
-		return -1;
+		goto fail_parse;
 
-	if (sockets_init() < 0)
-		return -1;
+	if (args.flags & OPT_EMBEDDED)
+		input_module = &input_async;
+	if (input_module->init() < 0)
+		goto fail_input;
+
+	output_set_embedded(args.flags & OPT_EMBEDDED);
+
+	if (sockets_init() < 0) {
+		ret = -1;
+		goto fail_sockets;
+	}
 
 	printc_dbg("%s\n", version_text);
 	if (setup_driver(&args) < 0) {
-		sockets_exit();
-		return -1;
+		ret = -1;
+		goto fail_driver;
 	}
 
 	if (device_probe_id(device_default) < 0)
@@ -369,7 +411,7 @@ int main(int argc, char **argv)
 
 	simio_init();
 
-	if (!args.no_rc)
+	if (!(args.flags & OPT_NO_RC))
 		process_rc_file();
 
 	/* Process commands */
@@ -385,9 +427,21 @@ int main(int argc, char **argv)
 	}
 
 	simio_exit();
-	stab_exit();
 	device_destroy();
+	stab_exit();
+fail_driver:
 	sockets_exit();
+fail_sockets:
+	input_module->exit();
+fail_input:
+fail_parse:
 
+	/* We need to do this on Windows, because in embedded mode we
+	 * may still have a running background thread for input. If so,
+	 * returning from main() won't cause the process to terminate.
+	 */
+#if defined(__Windows__) || defined(__CYGWIN__)
+	ExitProcess(ret);
+#endif
 	return ret;
 }

@@ -27,11 +27,30 @@
  * Returns the number of characters printed (not including colour
  * codes).
  */
-int printc(const char *fmt, ...);
-int printc_dbg(const char *fmt, ...);
-int printc_err(const char *fmt, ...);
+int printc(const char *fmt, ...)
+	__attribute__((format (printf, 1, 2)));
+int printc_dbg(const char *fmt, ...)
+	__attribute__((format (printf, 1, 2)));
+int printc_err(const char *fmt, ...)
+	__attribute__((format (printf, 1, 2)));
+int printc_shell(const char *fmt, ...)
+	__attribute__((format (printf, 1, 2)));
 
 void pr_error(const char *prefix);
+
+/* Enable embedded output mode. When enabled, all logical streams
+ * are sent to stdout (not stderr), and prefixed with the following
+ * sigils:
+ *
+ *   : normal
+ *   ! error
+ *   - debug
+ *   \ shell
+ *
+ * Additionally, ANSI codes are used for colourized output on Windows
+ * instead of changing the console text attributes.
+ */
+void output_set_embedded(int enable);
 
 /* Capture output. Capturing is started by calling capture_begin() with
  * a callback function. The callback is invoked for each line of output
@@ -44,10 +63,5 @@ typedef void (*capture_func_t)(void *user_data, const char *text);
 
 void capture_start(capture_func_t, void *user_data);
 void capture_end(void);
-
-/* Name lists. This function is used for printing multi-column sorted
- * lists of constant strings. Expected is a vector of const char *.
- */
-void namelist_print(struct vector *v);
 
 #endif

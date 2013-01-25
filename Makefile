@@ -38,15 +38,15 @@ UNAME_S := $(shell sh -c 'uname -s')
 UNAME_O := $(shell sh -c 'uname -o 2> /dev/null')
 
 ifeq ($(UNAME_S),Darwin) # Mac OS X/MacPorts stuff
-	PORTS_CFLAGS = -I/opt/local/include
-	PORTS_LDFLAGS = -L/opt/local/lib
+	PORTS_CFLAGS := -I/opt/local/include
+	PORTS_LDFLAGS := -L/opt/local/lib
 else
   ifeq ($(UNAME_S),OpenBSD) # OpenBSD Ports stuff
-	PORTS_CFLAGS = `pkg-config --cflags libusb`
-	PORTS_LDFLAGS = `pkg-config --libs libusb` -ltermcap -pthread
+	PORTS_CFLAGS := $(shell pkg-config --cflags libusb)
+	PORTS_LDFLAGS := $(shell pkg-config --libs libusb) -ltermcap -pthread
   else
-	PORTS_CFLAGS =
-	PORTS_LDFLAGS =
+	PORTS_CFLAGS :=
+	PORTS_LDFLAGS :=
   endif
 endif
 
@@ -62,15 +62,17 @@ else
     MSPDEBUG_CC = $(CC)
     BINARY = mspdebug
 
-    ifneq ($(filter $(UNAME_S),FreeBSD OpenBSD),)
+    ifneq ($(filter $(UNAME_S),OpenBSD),)
 	OS_LIBS =
+    else ifneq ($(filter $(UNAME_S),FreeBSD),)
+	OS_CFLAGS = -pthread
+	OS_LIBS = -lpthread
     else
-	OS_LIBS = -ldl
+	OS_LIBS = -lpthread -ldl
     endif
-
 endif
 
-INCLUDES = -I. -Isimio -Iformats -Idrivers -Iutil -Iui
+INCLUDES = -I. -Isimio -Iformats -Itransport -Idrivers -Iutil -Iui
 GCC_CFLAGS = -O1 -Wall -Wno-char-subscripts -ggdb
 CONFIG_CFLAGS = -DLIB_DIR=\"$(LIBDIR)\"
 
@@ -114,21 +116,32 @@ OBJ=\
     util/gdb_proto.o \
     util/dynload.o \
     util/demangle.o \
+    util/powerbuf.o \
+    util/ctrlc.o \
+    transport/cp210x.o \
+    transport/cdc_acm.o \
+    transport/ftdi.o \
+    transport/rf2500.o \
+    transport/ti3410.o \
+    transport/comport.o \
     drivers/device.o \
     drivers/bsl.o \
     drivers/fet.o \
+    drivers/fet_core.o \
+    drivers/fet_proto.o \
     drivers/fet_error.o \
     drivers/fet_db.o \
     drivers/flash_bsl.o \
     drivers/gdbc.o \
-    drivers/olimex.o \
-    drivers/rf2500.o \
     drivers/sim.o \
-    drivers/uif.o \
-    drivers/ti3410.o \
     drivers/tilib.o \
-    drivers/olimex_iso.o \
     drivers/goodfet.o \
+    drivers/obl.o \
+    drivers/devicelist.o \
+    drivers/fet_olimex_db.o \
+    drivers/jtdev.o \
+    drivers/jtaglib.o \
+    drivers/pif.o \
     formats/binfile.o \
     formats/coff.o \
     formats/elf32.o \
@@ -142,14 +155,20 @@ OBJ=\
     simio/simio_wdt.o \
     simio/simio_hwmult.o \
     simio/simio_gpio.o \
+    simio/simio_console.o \
     ui/gdb.o \
     ui/rtools.o \
     ui/sym.o \
     ui/devcmd.o \
+    ui/flatfile.o \
     ui/reader.o \
     ui/cmddb.o \
     ui/stdcmd.o \
     ui/aliasdb.o \
+    ui/power.o \
+    ui/input.o \
+    ui/input_console.o \
+    ui/input_async.o \
     ui/main.o
 
 $(BINARY): $(OBJ)
