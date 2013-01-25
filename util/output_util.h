@@ -21,9 +21,11 @@
 
 #include "output.h"
 #include "util.h"
+#include "powerbuf.h"
 
 /* Print colorized disassembly on command processor standard output */
-void disassemble(address_t addr, const uint8_t *buf, int len);
+void disassemble(address_t addr, const uint8_t *buf, int len,
+		 powerbuf_t power);
 
 /* Print colorized hexdump on standard output */
 void hexdump(address_t addr, const uint8_t *buf, int len);
@@ -36,5 +38,10 @@ void show_regs(const address_t *regs);
  * Returns non-zero if the result is of the form sym+0x0offset.
  */
 int print_address(address_t addr, char *buf, int max_len);
+
+/* Name lists. This function is used for printing multi-column sorted
+ * lists of constant strings. Expected is a vector of const char *.
+ */
+void namelist_print(struct vector *v);
 
 #endif

@@ -19,6 +19,7 @@
 #include <string.h>
 
 #include "output.h"
+#include "output_util.h"
 #include "dis.h"
 #include "simio.h"
 #include "simio_cpu.h"
@@ -29,13 +30,15 @@
 #include "simio_wdt.h"
 #include "simio_hwmult.h"
 #include "simio_gpio.h"
+#include "simio_console.h"
 
 static const struct simio_class *const class_db[] = {
 	&simio_tracer,
 	&simio_timer,
 	&simio_wdt,
 	&simio_hwmult,
-	&simio_gpio
+	&simio_gpio,
+	&simio_console
 };
 
 /* Simulator data. We keep a list of devices on the bus, and the special

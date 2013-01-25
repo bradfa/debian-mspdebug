@@ -1,4 +1,4 @@
-.TH mspdebug 1 "14 Aug 2012" "Version 0.20"
+.TH mspdebug 1 "26 Nov 2012" "Version 0.21"
 .SH NAME
 MSPDebug - debugging tool for MSP430 MCUs
 .SH SYNOPSIS
@@ -77,10 +77,14 @@ When using a V3 FET device via the TI library, allow the library to
 perform a firmware update if the FET firmware is incompatible with the
 library.
 .IP "\-\-require-fw-update \fIimage.txt\fR"
-When using a V3 FET device, force a firmware update using the given
-firmware image. The firmware file must be in TI Text format.
+When using a V3 FET device, or certain Olimex devices, force a firmware
+update using the given firmware image. The firmware format depends on
+the driver.
 .IP "\-\-version"
 Show program version and copyright information.
+.IP "\-\-embedded"
+Start mspdebug as an embedded subprocess. See the documentation
+accompanying the source release for more information on embedded mode.
 .SH DRIVERS
 A driver name must be specified on the command line for MSPDebug to
 connect to. Valid driver names are listed here.
@@ -88,15 +92,18 @@ connect to. Valid driver names are listed here.
 Connect to an eZ430-RF2500, Launchpad or Chronos device. Only USB
 connection is supported.
 .IP "\fBolimex\fR"
-Connect to an Olimex MSP-JTAG-TINY device. Both USB and tty access are
+Connect to an Olimex MSP430-JTAG-TINY device. Both USB and tty access are
 supported.
 .IP "\fBolimex-v1\fR"
-Connect to an Olimex MSP-JTAG-TINY (V1) device. Both USB and tty access are
+Connect to an Olimex MSP430-JTAG-TINY (V1) device. Both USB and tty access are
 supported. This driver must be used instead of \fBolimex\fR if connecting
 to a V1 device via a tty interface.
 .IP "\fBolimex-iso\fR"
-Connect to an Olimex MSP-JTAG-ISO device. Both USB and tty access are
+Connect to an Olimex MSP430-JTAG-ISO device. Both USB and tty access are
 supported.
+.IP "\fBolimex-iso-mk2\fR"
+Connect to an Olimex MSP430-JTAG-ISO-MK2 device. Both USB and tty
+access are supported.
 .IP "\fBsim\fR"
 Do not connect to any hardware device, but instead start in simulation
 mode. A 64k buffer is allocated to simulate the device memory.
@@ -129,8 +136,6 @@ programming device itself.
 
 Currently, only memory read/write and erase are supported. CPU control
 via the bootloader is not possible.
-
-USB connection is not supported for this driver.
 .IP "\fBflash-bsl\fR"
 Connect to the built-in bootloader in MSP430 devices with flash bootloader
 memory. Devices with ROM bootloaders require another driver. Currently,
@@ -154,12 +159,19 @@ file (MSP430.DLL for Windows, libmsp430.so for Unix-like systems) must
 be present in the dynamic loader search path.
 
 USB connection is not supported for this driver. This driver supports
-watchpoints.
+watchpoints. Note that the \fB-d\fR option for this driver passes its
+argument straight through to the library's \fBMSP430_Initialize\fR
+function. Any special argument supported by that function is therefore
+accessible via the \fB-d\fR option.
 .IP "\fBgoodfet\fR"
 Connect to a GoodFET device. JTAG mode must be used, and only TTY access
 is supported. This device can be used for memory access (read, erase and
 program), but CPU control is limited. The CPU may be halted, run and
 reset, but register access and breakpoints aren't supported.
+.IP "\fBpif\fR"
+Connect to a parallel-port JTAG controller. Currently, this driver is only
+supported for Linux. A parallel port device must be specified via the
+\fB-d\fR option.
 .SH COMMANDS
 MSPDebug can accept commands either through an interactive prompt, or
 non-interactively when specified on the command line. The supported
@@ -334,6 +346,10 @@ command is like \fBprog\fR, but it does not load symbols or erase
 the device before programming.
 
 The CPU is reset and halted before and after programming.
+.IP "\fBload_raw\fR \fIfilename\fR \fIaddress\fR"
+Write the data contained in a raw binary file to the given memory address.
+
+The CPU is reset and halted before and after programming.
 .IP "\fBlocka\fR [\fBset\fR|\fBclear\fR]"
 Show or change the status of the LOCKA bit in the chip's memory
 controller. The LOCKA bit is set on POR and acts as a write-protect bit
@@ -375,6 +391,28 @@ values may be specified as address expressions.
 With no arguments, this command displays all available option variables.
 With just an option name as its argument, it displays the current value
 of that option.
+.IP "\fBpower info\fR"
+Show basic power statistics gathered over the last few sessions. This
+includes total charge consumption, run time and average current.
+.IP "\fBpower clear\fR"
+Clear all recorded power statistics.
+.IP "\fBpower all\fR [\fIgranularity\fR]"
+Show sample data gathered over all sessions. An optional granularity can
+be specified, in microseconds. For each time slice, relative session time,
+charge consumption, current consumption and approximate code location are
+shown.
+.IP "\fBpower session\fR \fIN\fR [\fIgranularity\fR]"
+Same as \fBpower all\fR, except that data is shown only for the \fIN\fRth
+session.
+.IP "\fBpower export-csv\fR \fIN\fR \fIfilename\fR"
+Export raw sample data for the \fIN\fRth session to the given file in CSV
+format. For each line, the columns are, in order: relative time in
+microseconds, current consumption in microamps, memory address.
+.IP "\fBpower profile\fR"
+If a symbol table is loaded, compile and correlate all gathered power data
+against the symbol table. A single table is then shown listing, per function,
+charge consumption, run time and average current. The functions are listed
+in order of charge consumption (biggest consumers first).
 .IP "\fBprog\fR \fIfilename\fR"
 Erase and reprogram the device under test using the binary file
 supplied. The file format will be auto-detected and may be any of
@@ -403,6 +441,11 @@ is pressed by the user.
 After the CPU halts, the current register values are shown as well as
 a disassembly of the first few instructions at the address selected
 by the program counter.
+.IP "\fBsave_raw\fR \fIaddress\fR \fIlength\fR \fIfilename\fR"
+Save a region of memory to a raw binary file. The address and length
+arguments may both be address expressions.
+
+If the specified file already exists, then it will be overwritten.
 .IP "\fBset\fR \fIregister\fR \fIvalue\fR"
 Alter the value of a register. Registers are specified as numbers from
 0 through 15. Any leading non-numeric characters are ignored (so a
@@ -497,47 +540,10 @@ renamed.
 Compare the contents of the given binary file to the chip memory. If any
 differences are found, a message is printed for the first mismatched
 byte.
-.SH SUPPORTED CHIPS
-The following chips are supported when using FET-compatible drivers:
-.PP
-.RS 0
-CC430F5133         MSP430F2252        MSP430F5342
-.RS 0
-CC430F5137         MSP430F2272        MSP430F5418
-.RS 0
-CC430F6137         MSP430F2274        MSP430F5437
-.RS 0
-MSP430AFE253       MSP430F235         MSP430F5437A
-.RS 0
-MSP430F1121        MSP430F2370        MSP430F5438
-.RS 0
-MSP430F1232        MSP430F2418        MSP430F5438A
-.RS 0
-MSP430F147         MSP430F247         MSP430F5510
-.RS 0
-MSP430F148         MSP430F249         MSP430F5525
-.RS 0
-MSP430F149         MSP430F2616        MSP430F5526
-.RS 0
-MSP430F1611        MSP430F2617        MSP430F5527
-.RS 0
-MSP430F1612        MSP430F2618        MSP430F5528
-.RS 0
-MSP430F169         MSP430F413         MSP430F5529
-.RS 0
-MSP430F2012/G2231  MSP430F427         MSP430F6435
-.RS 0
-MSP430F2013        MSP430F4270        MSP430F6736
-.RS 0
-MSP430F2121        MSP430F449         MSP430FG4618
-.RS 0
-MSP430F2122        MSP430F47173       MSP430FR5739
-.RS 0
-MSP430F2131        MSP430F47197       MSP430G2252
-.RS 0
-MSP430F2132        MSP430F4784        MSP430G2452
-.RS 0
-MSP430F2234        MSP430F5329        MSP430G2553/G2403
+.IP "\fBverify_raw \fIfilename\fR \fIaddress\fR"
+Compare the contents of a raw binary file to the device memory at the given
+address. If any differences are found, a message is printed for the first
+mismatched byte.
 .SH BINARY FORMATS
 The following binary/symbol formats are supported by MSPDebug:
 

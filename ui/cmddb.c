@@ -22,12 +22,14 @@
 #include "util.h"
 
 #include "devcmd.h"
+#include "flatfile.h"
 #include "gdb.h"
 #include "rtools.h"
 #include "sym.h"
 #include "stdcmd.h"
 #include "simio.h"
 #include "aliasdb.h"
+#include "power.h"
 
 const struct cmddb_record commands[] = {
 	{
@@ -127,6 +129,29 @@ const struct cmddb_record commands[] = {
 		.help =
 "verify <filename>\n"
 "    Compare the contents of the given binary file to the device memory.\n"
+	},
+	{
+		.name = "load_raw",
+		.func = cmd_load_raw,
+		.help =
+"load_raw <filename> <address>\n"
+"    Write the data contained in a raw binary file to the given memory\n"
+"    address.\n"
+	},
+	{
+		.name = "verify_raw",
+		.func = cmd_verify_raw,
+		.help =
+"verify_raw <filename> <address>\n"
+"    Compare the contents of a raw binary file to the device memory at\n"
+"    the given address.\n"
+	},
+	{
+		.name = "save_raw",
+		.func = cmd_save_raw,
+		.help =
+"save_raw <address> <length> <filename>\n"
+"    Save a region of memory to a raw binary file.\n"
 	},
 	{
 		.name = "md",
@@ -308,6 +333,23 @@ const struct cmddb_record commands[] = {
 		.help =
 "fill <address> <length> <b0> [b1 b2 ...]\n"
 "    Fill the given memory range with a repeated byte sequence.\n"
+	},
+	{
+		.name = "power",
+		.func = cmd_power,
+		.help =
+"power info\n"
+"    Show basic power statistics.\n"
+"power clear\n"
+"    Clear power statistics.\n"
+"power all [granularity]\n"
+"    Show all power data, optionally specifying a granularity in us.\n"
+"power session <N> [granularity]\n"
+"    Show data only for the specified session.\n"
+"power export-csv <N> <filename>\n"
+"    Write session data for the given session to a CSV file.\n"
+"power profile\n"
+"    List power profile data by symbol.\n"
 	}
 };
 

@@ -24,10 +24,13 @@
 #include "sport.h"
 #include "util.h"
 #include "output.h"
+#include "ctrlc.h"
 
 #ifdef __linux__
 #include <linux/serial.h>
 #endif
+
+#define TIMEOUT_S	30
 
 #ifndef __Windows__
 
@@ -157,7 +160,7 @@ int sport_read(sport_t s, uint8_t *data, int len)
 
 	do {
 		struct timeval tv = {
-			.tv_sec = 5,
+			.tv_sec = TIMEOUT_S,
 			.tv_usec = 0
 		};
 
@@ -262,7 +265,7 @@ static int xfer_wait(sport_t s, LPOVERLAPPED ovl)
 			return -1;
 		}
 
-		r = WaitForSingleObject(ctrlc_win32_event(), 5000);
+		r = WaitForSingleObject(ctrlc_win32_event(), TIMEOUT_S * 1000);
 		if (r == WAIT_TIMEOUT) {
 			CancelIo(s);
 			SetLastError(WAIT_TIMEOUT);
@@ -278,7 +281,6 @@ int sport_read(sport_t s, uint8_t *data, int len)
 	OVERLAPPED ovl = {0};
 
 	ovl.hEvent = ctrlc_win32_event();
-	ctrlc_reset();
 
 	ReadFile(s, (void *)data, len, NULL, &ovl);
 	return xfer_wait(s, &ovl);
@@ -289,7 +291,6 @@ int sport_write(sport_t s, const uint8_t *data, int len)
 	OVERLAPPED ovl = {0};
 
 	ovl.hEvent = ctrlc_win32_event();
-	ctrlc_reset();
 
 	WriteFile(s, (void *)data, len, NULL, &ovl);
 	return xfer_wait(s, &ovl);

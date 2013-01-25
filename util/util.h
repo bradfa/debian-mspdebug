@@ -22,10 +22,6 @@
 #include <stdint.h>
 #include <ctype.h>
 
-#ifdef __Windows__
-#include <windows.h>
-#endif
-
 #define ARRAY_LEN(a) (sizeof(a) / sizeof((a)[0]))
 
 #define LE_BYTE(b, x) ((int)((uint8_t *)(b))[x])
@@ -37,12 +33,6 @@ typedef uint32_t address_t;
 
 /* Retrive a string describing the last system error */
 const char *last_error(void);
-
-/* Check and catch ^C from the user */
-void ctrlc_init(void);
-void ctrlc_exit(void);
-void ctrlc_reset(void);
-int ctrlc_check(void);
 
 /* Retrieve the next word from a pointer to the rest of a command
  * argument buffer. Returns NULL if no more words.
@@ -62,8 +52,6 @@ int hexval(int c);
 
 #ifdef __Windows__
 char *strsep(char **strp, const char *delim);
-
-HANDLE ctrlc_win32_event(void);
 #endif
 
 /* Expand `~' in path names. Caller must free the returned ptr */
@@ -72,5 +60,22 @@ char *expand_tilde(const char *path);
 /* Sleep for a number of seconds (_s) or milliseconds (_ms) */
 int delay_s(unsigned int s);
 int delay_ms(unsigned int s);
+
+/* Base64 encode a block without breaking into lines. Returns the number
+ * of source bytes encoded. The output is nul-terminated.
+ */
+static inline int base64_encoded_size(int decoded_size)
+{
+	return ((decoded_size + 2) / 3) * 4;
+}
+
+int base64_encode(const uint8_t *src, int len, char *dst, int max_len);
+
+/* printf format for long long args */
+#ifdef __MINGW32__
+#define LLFMT "I64d"
+#else
+#define LLFMT "lld"
+#endif
 
 #endif
