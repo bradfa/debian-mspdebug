@@ -1,3 +1,10 @@
+mspdebug (0.21-0~exp1) experimental; urgency=low
+
+  * New upstream version
+    + Bug fixes and refactoring of drivers
+
+ -- Luca Bruno <lucab@debian.org>  Tue, 29 Jan 2013 09:21:14 +0100
+
 mspdebug (0.20-0~exp1) experimental; urgency=low
 
   * New upstream version
