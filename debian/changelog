@@ -1,3 +1,9 @@
+mspdebug (0.21-1) unstable; urgency=low
+
+  * Upload to unstable
+
+ -- Luca Bruno <lucab@debian.org>  Sun, 05 May 2013 23:18:38 +0200
+
 mspdebug (0.21-0~exp1) experimental; urgency=low
 
   * New upstream version
