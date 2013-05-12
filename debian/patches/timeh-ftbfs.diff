@@ -1,0 +1,22 @@
+commit f94383d839086f502972483bc7997f24bee406eb
+Author: Rob Spanton <rspanton@zepler.net>
+Date:   Thu Nov 29 17:36:11 2012 +0000
+
+    Add two missing includes to util.c
+    
+    util.c was missing sys/select.h and sys/time.h.  On some platforms,
+    this lead to warnings.
+
+diff --git a/util/sport.c b/util/sport.c
+index 309f71e..d20c71f 100644
+--- a/util/sport.c
++++ b/util/sport.c
+@@ -20,6 +20,8 @@
+ #include <unistd.h>
+ #include <errno.h>
+ #include <string.h>
++#include <sys/select.h>
++#include <sys/time.h>
+ 
+ #include "sport.h"
+ #include "util.h"
