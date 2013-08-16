@@ -20,6 +20,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
+#include <sys/time.h>
 
 #include "sport.h"
 #include "util.h"
@@ -33,6 +34,8 @@
 #define TIMEOUT_S	30
 
 #ifndef __Windows__
+
+#include <sys/select.h>
 
 #ifndef B460800
 #define B460800 460800
@@ -252,6 +255,8 @@ int sport_set_modem(sport_t s, int bits)
 static int xfer_wait(sport_t s, LPOVERLAPPED ovl)
 {
 	DWORD result = 0;
+
+	ResetEvent(ctrlc_win32_event());
 
 	while (!GetOverlappedResult(s, ovl, &result, FALSE)) {
 		DWORD r;

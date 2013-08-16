@@ -100,10 +100,11 @@ static int fetch_operand(struct sim_device *dev,
 		}
 
 		addr = MEM_GETW(dev, dev->regs[MSP430_REG_PC]);
-		dev->regs[MSP430_REG_PC] += 2;
 
 		if (reg != MSP430_REG_SR)
 			addr += dev->regs[reg];
+
+		dev->regs[MSP430_REG_PC] += 2;
 		break;
 
 	case MSP430_AMODE_INDIRECT:
@@ -172,7 +173,7 @@ static int store_operand(struct sim_device *dev,
 			 uint16_t addr, uint16_t data)
 {
 	if (amode == MSP430_AMODE_REGISTER) {
-		dev->regs[reg] = data;
+		dev->regs[reg] = is_byte ? data & 0xFF : data;
 		return 0;
 	}
 
@@ -209,6 +210,8 @@ static int step_double(struct sim_device *dev, uint16_t ins)
 	uint32_t res_data;
 	uint32_t msb = is_byte ? 0x80 : 0x8000;
 	uint32_t mask = is_byte ? 0xff : 0xffff;
+	uint32_t shiftMask = 0x000f;
+	uint32_t i = 0;
 	int cycles;
 
 	if (amode_dst == MSP430_AMODE_REGISTER && dreg == MSP430_REG_PC) {
@@ -266,22 +269,29 @@ static int step_double(struct sim_device *dev, uint16_t ins)
 		if (res_data & (msb << 1))
 			dev->regs[MSP430_REG_SR] |= MSP430_SR_C;
 		if (!((src_data ^ dst_data) & msb) &&
-		    (src_data ^ dst_data) & msb)
+		    (src_data ^ res_data) & msb)
 			dev->regs[MSP430_REG_SR] |= MSP430_SR_V;
 		break;
 
 	case MSP430_OP_DADD:
-		res_data = src_data + dst_data;
+		res_data = 0;
 		if (dev->regs[MSP430_REG_SR] & MSP430_SR_C)
 			res_data++;
+		shiftMask = 0x000f;
+		for(i = 0; i < 4; ++i)
+		{
+			res_data += (src_data & shiftMask) + (dst_data & shiftMask);
+			if( (res_data & (0x1f << (i*4))) > (9 << (i*4)))
+				res_data += 6 << (i*4);
+			shiftMask = shiftMask << 4;
+		}
 
 		dev->regs[MSP430_REG_SR] &= ~ARITH_BITS;
 		if (!(res_data & mask))
 			dev->regs[MSP430_REG_SR] |= MSP430_SR_Z;
-		if (res_data == 1)
+		if (res_data & msb)
 			dev->regs[MSP430_REG_SR] |= MSP430_SR_N;
-		if ((is_byte && res_data > 99) ||
-		    (!is_byte && res_data > 9999))
+		if (res_data & (msb << 1))
 			dev->regs[MSP430_REG_SR] |= MSP430_SR_C;
 		break;
 
@@ -351,7 +361,7 @@ static int step_single(struct sim_device *dev, uint16_t ins)
 	else if (amode == MSP430_AMODE_REGISTER)
 		cycles = 1;
 	else
-		cycles = 5;
+		cycles = 3;
 
 	switch (opcode) {
 	case MSP430_OP_RRC:
