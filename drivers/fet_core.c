@@ -50,6 +50,7 @@ struct fet_device {
 	int				poll_enable;
 
 	struct fet_proto		proto;
+	fperm_t				active_fperm;
 };
 
 /**********************************************************************
@@ -112,6 +113,7 @@ struct fet_device {
 #define FET_CONFIG_FLASH_TESET  4
 #define FET_CONFIG_FLASH_LOCK   5
 #define FET_CONFIG_PROTOCOL     8
+#define FET_CONFIG_UNLOCK_BSL	11
 
 #define FET_RUN_FREE           1
 #define FET_RUN_STEP           2
@@ -373,18 +375,26 @@ static int is_new_olimex(const struct fet_device *dev)
 	return 0;
 }
 
+static int try_new(struct fet_device *dev, const char *force_id)
+{
+	if (!identify_new(dev, force_id))
+		return 0;
+
+	return identify_olimex(dev, force_id);
+}
+
 static int do_identify(struct fet_device *dev, const char *force_id)
 {
 	if (is_new_olimex(dev))
 		return identify_olimex(dev, force_id);
 
 	if (dev->fet_flags & FET_IDENTIFY_NEW)
-		return identify_new(dev, force_id);
+		return try_new(dev, force_id);
 
 	if (dev->version < 20300000)
 		return identify_old(dev);
 
-	return identify_new(dev, force_id);
+	return try_new(dev, force_id);
 }
 
 static void power_init(struct fet_device *dev)
@@ -506,6 +516,41 @@ static int power_poll(struct fet_device *dev)
 	return 0;
 }
 
+static int refresh_fperm(struct fet_device *dev)
+{
+	fperm_t fp = opdb_read_fperm();
+	fperm_t delta = dev->active_fperm ^ fp;
+
+	if (delta & FPERM_LOCKED_FLASH) {
+		int opt = (fp & FPERM_LOCKED_FLASH) ? 1 : 0;
+
+		printc_dbg("%s locked flash access\n",
+			   opt ? "Enabling" : "Disabling");
+		if (fet_proto_xfer(&dev->proto,
+				   C_CONFIGURE, NULL, 0,
+				   2, FET_CONFIG_FLASH_LOCK, opt) < 0) {
+			printc_err("fet: FET_CONFIG_FLASH_LOCK failed\n");
+			return -1;
+		}
+	}
+
+	if (delta & FPERM_BSL) {
+		int opt = (fp & FPERM_BSL) ? 1 : 0;
+
+		printc_dbg("%s BSL access\n",
+			   opt ? "Enabling" : "Disabling");
+		if (fet_proto_xfer(&dev->proto,
+				   C_CONFIGURE, NULL, 0,
+				   2, FET_CONFIG_UNLOCK_BSL, opt) < 0) {
+			printc_err("fet: FET_CONFIG_UNLOCK_BSL failed\n");
+			return -1;
+		}
+	}
+
+	dev->active_fperm = fp;
+	return 0;
+}
+
 static int do_run(struct fet_device *dev, int type)
 {
 	if (fet_proto_xfer(&dev->proto, C_RUN, NULL, 0, 2, type, 0) < 0) {
@@ -528,12 +573,7 @@ int fet_erase(device_t dev_base, device_erase_type_t type, address_t addr)
 		return -1;
 	}
 
-	if (fet_proto_xfer(&dev->proto,
-			   C_CONFIGURE, NULL, 0,
-			   2, FET_CONFIG_FLASH_LOCK, 0) < 0) {
-		printc_err("fet: config (2) failed\n");
-		return -1;
-	}
+	refresh_fperm(dev);
 
 	switch (type) {
 	case DEVICE_ERASE_MAIN:
@@ -556,7 +596,7 @@ int fet_erase(device_t dev_base, device_erase_type_t type, address_t addr)
 	}
 
 	if (fet_proto_xfer(&dev->proto, C_ERASE, NULL, 0,
-			   3, fet_erase_type, addr, 0) < 0) {
+			   3, fet_erase_type, addr, 1) < 0) {
 		printc_err("fet: erase command failed\n");
 		return -1;
 	}
@@ -677,22 +717,28 @@ void fet_destroy(device_t dev_base)
 {
 	struct fet_device *dev = (struct fet_device *)dev_base;
 
-	/* The second argument to C_RESET is a boolean which specifies
-	 * whether the chip should run or not. The final argument is
-	 * also a boolean. Setting it non-zero is required to get the
-	 * RST pin working on the G2231, but it must be zero on the
-	 * FR5739, or else the value of the reset vector gets set to
-	 * 0xffff at the start of the next JTAG session.
-	 */
-	if (fet_proto_xfer(&dev->proto, C_RESET, NULL, 0, 3, FET_RESET_ALL, 1,
-			   !device_is_fram(dev_base)) < 0)
-		printc_err("fet: final reset failed\n");
+	if (dev->fet_flags & FET_SKIP_CLOSE) {
+		printc_dbg("Skipping close procedure\n");
+	} else {
+		/* The second argument to C_RESET is a boolean which
+		 * specifies whether the chip should run or not. The
+		 * final argument is also a boolean. Setting it non-zero
+		 * is required to get the RST pin working on the G2231,
+		 * but it must be zero on the FR5739, or else the value
+		 * of the reset vector gets set to 0xffff at the start
+		 * of the next JTAG session.
+		 */
+		if (fet_proto_xfer(&dev->proto, C_RESET, NULL, 0, 3,
+				   FET_RESET_ALL, 1,
+				   !device_is_fram(dev_base)) < 0)
+			printc_err("fet: final reset failed\n");
 
-	if (fet_proto_xfer(&dev->proto, C_CLOSE, NULL, 0, 1, 0) < 0)
-		printc_err("fet: close command failed\n");
+		if (fet_proto_xfer(&dev->proto, C_CLOSE, NULL, 0, 1, 0) < 0)
+			printc_err("fet: close command failed\n");
 
-	if (dev->base.power_buf)
-		powerbuf_free(dev->base.power_buf);
+		if (dev->base.power_buf)
+			powerbuf_free(dev->base.power_buf);
+	}
 
 	dev->proto.transport->ops->destroy(dev->proto.transport);
 	free(dev);
@@ -795,6 +841,8 @@ int fet_writemem(device_t dev_base, address_t addr,
 {
 	struct fet_device *dev = (struct fet_device *)dev_base;
 	int block_size = get_adjusted_block_size();
+
+	refresh_fperm(dev);
 
 	if (addr & 1) {
 		if (write_byte(dev, addr, *buffer) < 0)
@@ -971,6 +1019,9 @@ device_t fet_open(const struct device_args *args,
 {
 	struct fet_device *dev = malloc(sizeof(*dev));
 	int i;
+
+	if (args->flags & DEVICE_FLAG_SKIP_CLOSE)
+		fet_flags |= FET_SKIP_CLOSE;
 
 	if (!dev) {
 		pr_error("fet: failed to allocate memory");
