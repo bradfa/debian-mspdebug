@@ -1,3 +1,10 @@
+mspdebug (0.22-2) unstable; urgency=low
+
+  * Fix build prefix for lookup path, thanks to Frederik Möllers
+    (Closes: #730215)
+
+ -- Luca Bruno <lucab@debian.org>  Fri, 22 Nov 2013 20:28:42 +0100
+
 mspdebug (0.22-1) unstable; urgency=low
 
   * New upstream release
