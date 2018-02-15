@@ -1,3 +1,15 @@
+mspdebug (0.23-1) unstable; urgency=low
+
+  * New upstream release
+    (Closes: #749434)
+  * gbp.conf: Fix import-orig section name
+  * Bump compat level to 10
+  * Update watch file for upstream move to github
+  * Bump watch file to version 4
+  * Bump Standards-Version to 4.1.3
+
+ -- Andrew Bradford <andrew@bradfordembedded.com>  Thu, 15 Feb 2018 11:04:49 -0500
+
 mspdebug (0.22-2) unstable; urgency=low
 
   * Fix build prefix for lookup path, thanks to Frederik Möllers
