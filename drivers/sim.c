@@ -134,7 +134,8 @@ static int fetch_operand(struct sim_device *dev,
 			return 0;
 		}
 		addr = dev->regs[reg];
-		dev->regs[reg] += (is_byte && reg != MSP430_REG_PC) ? 1 : 2;
+		dev->regs[reg] += (is_byte && reg != MSP430_REG_PC &&
+					      reg != MSP430_REG_SP) ? 1 : 2;
 		break;
 	}
 
@@ -220,6 +221,11 @@ static int step_double(struct sim_device *dev, uint16_t ins)
 			cycles = 2;
 		else
 			cycles = 3;
+	} else if (sreg == MSP430_REG_SR || sreg == MSP430_REG_R3) {
+		if (amode_dst == MSP430_AMODE_REGISTER)
+			cycles = 1;
+		else
+			cycles = 4;
 	} else {
 		if (amode_src == MSP430_AMODE_INDIRECT ||
 		    amode_src == MSP430_AMODE_INDIRECT_INC)
@@ -696,6 +702,10 @@ static int sim_ctl(device_t dev_base, device_ctl_t op)
 	case DEVICE_CTL_RUN:
 		dev->running = 1;
 		return 0;
+
+	default:
+		printc_err("sim: unsupported operation\n");
+		return -1;
 	}
 
 	return 0;

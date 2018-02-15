@@ -1,5 +1,5 @@
 /* MSPDebug - debugging tool for MSP430 MCUs
- * Copyright (C) 2009-2013 Daniel Beer
+ * Copyright (C) 2009-2015 Daniel Beer
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -54,6 +54,10 @@
 #include "input.h"
 #include "input_async.h"
 #include "pif.h"
+#include "loadbsl.h"
+#include "fet3.h"
+#include "rom_bsl.h"
+#include "chipinfo.h"
 
 #ifdef __CYGWIN__
 #include <sys/cygwin.h>
@@ -82,12 +86,16 @@ static const struct device_class *const driver_table[] = {
 	&device_gdbc,
 	&device_tilib,
 	&device_goodfet,
-	&device_pif
+	&device_pif,
+	&device_gpio,
+	&device_loadbsl,
+	&device_ezfet,
+	&device_rom_bsl
 };
 
 static const char *version_text =
-"MSPDebug version 0.22 - debugging tool for MSP430 MCUs\n"
-"Copyright (C) 2009-2013 Daniel Beer <dlbeer@gmail.com>\n"
+"MSPDebug version 0.23 - debugging tool for MSP430 MCUs\n"
+"Copyright (C) 2009-2015 Daniel Beer <dlbeer@gmail.com>\n"
 "This is free software; see the source for copying conditions.  There is NO\n"
 "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR "
 "PURPOSE.\n";
@@ -137,6 +145,14 @@ static void usage(const char *progname)
 "        Show copyright and version information.\n"
 "    --embedded\n"
 "        Run in embedded mode.\n"
+"    --bsl-entry-sequence <seq>\n"
+"        Specify a BSL entry sequence. Each character specifies a modem\n"
+"        control line transition (R: RTS on, r: RTS off, D: DTR on, \n"
+"        d: DTR off).\n"
+"    --bsl-gpio-rts\n"
+"        On some host (say RaspberryPi) defines a GPIO pin# to be used as RTS\n"
+"    --bsl-gpio-dtr\n"
+"        On some host (say RaspberryPi) defines a GPIO pin# to be used as DTR\n"
 "\n"
 "Most drivers connect by default via USB, unless told otherwise via the\n"
 "-d option. By default, the first USB device found is opened.\n"
@@ -234,7 +250,10 @@ static int parse_cmdline_args(int argc, char **argv,
 		LOPT_FORCE_RESET,
 		LOPT_ALLOW_FW_UPDATE,
 		LOPT_REQUIRE_FW_UPDATE,
-		LOPT_EMBEDDED
+		LOPT_EMBEDDED,
+		LOPT_BSL_ENTRY_SEQUENCE,
+		LOPT_BSL_GPIO_RTS,
+		LOPT_BSL_GPIO_DTR,
 	};
 
 	static const struct option longopts[] = {
@@ -249,6 +268,9 @@ static int parse_cmdline_args(int argc, char **argv,
 		{"allow-fw-update",	0, 0, LOPT_ALLOW_FW_UPDATE},
 		{"require-fw-update",	1, 0, LOPT_REQUIRE_FW_UPDATE},
 		{"embedded",		0, 0, LOPT_EMBEDDED},
+		{"bsl-entry-sequence",	1, 0, LOPT_BSL_ENTRY_SEQUENCE},
+		{"bsl-gpio-rts",	1, 0, LOPT_BSL_GPIO_RTS},
+		{"bsl-gpio-dtr",	1, 0, LOPT_BSL_GPIO_DTR},
 		{NULL, 0, 0, 0}
 	};
 
@@ -270,6 +292,19 @@ static int parse_cmdline_args(int argc, char **argv,
 
 				opdb_set("quiet", &v);
 			}
+			break;
+
+		case LOPT_BSL_ENTRY_SEQUENCE:
+			args->devarg.bsl_entry_seq = optarg;
+			break;
+
+		case LOPT_BSL_GPIO_RTS:
+			args->devarg.bsl_gpio_used = 1;
+			args->devarg.bsl_gpio_rts = atoi ( optarg );
+			break;
+		case LOPT_BSL_GPIO_DTR:
+			args->devarg.bsl_gpio_used = 1;
+			args->devarg.bsl_gpio_dtr = atoi ( optarg );
 			break;
 
 		case LOPT_EMBEDDED:
@@ -322,6 +357,7 @@ static int parse_cmdline_args(int argc, char **argv,
 
 		case LOPT_VERSION:
 			printc("%s", version_text);
+			printc("%s", chipinfo_copyright());
 			exit(0);
 
 		case 'v':
@@ -443,7 +479,8 @@ int main(int argc, char **argv)
 		goto fail_sockets;
 	}
 
-	printc_dbg("%s\n", version_text);
+	printc_dbg("%s", version_text);
+	printc_dbg("%s\n", chipinfo_copyright());
 	if (setup_driver(&args) < 0) {
 		ret = -1;
 		goto fail_driver;

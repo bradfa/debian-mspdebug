@@ -64,6 +64,7 @@ struct tilib_device {
 	STATUS_T TIDLL (*MSP430_Reset)(long method, long execute,
 					long releaseJTAG);
 	STATUS_T TIDLL (*MSP430_Erase)(long type, long address, long length);
+	STATUS_T TIDLL (*MSP430_Secure)(void);
 	STATUS_T TIDLL (*MSP430_Error_Number)(void);
 	const char *TIDLL (*MSP430_Error_String)(long errNumber);
 
@@ -185,6 +186,10 @@ static int get_all_funcs(struct tilib_device *dev)
 
 	dev->MSP430_Erase = get_func(dev->hnd, "MSP430_Erase");
 	if (!dev->MSP430_Erase)
+		return -1;
+
+	dev->MSP430_Secure = get_func(dev->hnd, "MSP430_Secure");
+	if (!dev->MSP430_Secure)
 		return -1;
 
 	dev->MSP430_Error_Number = get_func(dev->hnd, "MSP430_Error_Number");
@@ -510,6 +515,13 @@ static int tilib_ctl(device_t dev_base, device_ctl_t op)
 
         case DEVICE_CTL_STEP:
 		return do_step(dev);
+
+	case DEVICE_CTL_SECURE:
+		if (dev->MSP430_Secure() < 0) {
+			report_error(dev, "MSP430_Secure");
+			return -1;
+		}
+		return 0;
 	}
 
 	return 0;
@@ -519,7 +531,7 @@ static device_status_t tilib_poll(device_t dev_base)
 {
 	struct tilib_device *dev = (struct tilib_device *)dev_base;
 
-        if ((delay_ms(50) < 0) || ctrlc_check())
+        if (delay_ms(50) < 0)
                 return DEVICE_STATUS_INTR;
 
 	if (event_fetch(dev) & MID_HALT_ANY)

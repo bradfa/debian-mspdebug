@@ -177,6 +177,15 @@ const struct cmddb_record commands[] = {
  "    Reset (and halt) the CPU.\n"
 	},
 	{
+		.name = "blow_jtag_fuse",
+		.func = cmd_blow_jtag_fuse,
+		.help =
+"blow-jtag-fuse\n"
+"    Blow the device's JTAG fuse.\n"
+"\n"
+"    \x1b[1mWARNING: this is an irreversible operation!\x1b[0m\n"
+	},
+	{
 		.name = "erase",
 		.func = cmd_erase,
 		.help =
@@ -345,7 +354,16 @@ const struct cmddb_record commands[] = {
 "    Write session data for the given session to a CSV file.\n"
 "power profile\n"
 "    List power profile data by symbol.\n"
-	}
+	},
+#ifndef NO_SHELLCMD
+	{
+		.name = "!",
+		.func = cmd_shellcmd,
+		.help =
+"! [command [args ...]]\n"
+"    Invoke an interactive shell, optionally execute command.\n"
+	},
+#endif /* !NO_SHELLCMD */
 };
 
 int cmddb_get(const char *name, struct cmddb_record *ret)

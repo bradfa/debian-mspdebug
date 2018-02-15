@@ -30,7 +30,8 @@ typedef enum {
 	DEVICE_CTL_RESET,
 	DEVICE_CTL_RUN,
 	DEVICE_CTL_HALT,
-	DEVICE_CTL_STEP
+	DEVICE_CTL_STEP,
+	DEVICE_CTL_SECURE
 } device_ctl_t;
 
 typedef enum {
@@ -79,6 +80,10 @@ struct device_args {
 	const char		*forced_chip_id;
 	const char		*requested_serial;
 	const char		*require_fwupdate;
+	const char		*bsl_entry_seq;
+	int			bsl_gpio_used;
+	int			bsl_gpio_rts;
+	int			bsl_gpio_dtr;
 };
 
 struct device_class {

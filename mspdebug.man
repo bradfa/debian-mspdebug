@@ -1,4 +1,4 @@
-.TH mspdebug 1 "18 Jul 2013" "Version 0.22"
+.TH mspdebug 1 "2 Mar 2015" "Version 0.23"
 .SH NAME
 MSPDebug - debugging tool for MSP430 MCUs
 .SH SYNOPSIS
@@ -94,7 +94,20 @@ Show program version and copyright information.
 .IP "\-\-embedded"
 Start mspdebug as an embedded subprocess. See the documentation
 accompanying the source release for more information on embedded mode.
+.IP "\-\-bsl\-entry\-sequence \fIseq\fR"
+Specify a BSL entry sequence. Each character specifies a modem control
+line transition (R: RTS on, r: RTS off, D: DTR on, d: DTR off). A comma
+indicates a delay. The entry and exit sequences are separated by a
+colon. The default value is \fBdR,r,R,r,R,D:dR,DR\fR, for the
+\fBflash-bsl\fR driver.
 .SH DRIVERS
+For drivers supporting both USB and tty access, USB is the default,
+unless specified otherwise (see \fB-d\fR above).
+
+On Linux, if USB access is used, the kernel driver (if any) is
+detached from the tty device. If further access to the tty device is
+needed, unloading and re-loading of the driver (e.g. cdc-acm.ko) is required.
+
 A driver name must be specified on the command line for MSPDebug to
 connect to. Valid driver names are listed here.
 .IP "\fBrf2500\fR"
@@ -172,15 +185,42 @@ watchpoints. Note that the \fB-d\fR option for this driver passes its
 argument straight through to the library's \fBMSP430_Initialize\fR
 function. Any special argument supported by that function is therefore
 accessible via the \fB-d\fR option.
+
+Automatic device discovery works only on Linux and Windows. On other
+systems, the appropriate ACM serial node must be explicitly specified.
 .IP "\fBgoodfet\fR"
-Connect to a GoodFET device. JTAG mode must be used, and only TTY access
+Connect to a GoodFET device. JTAG mode must be used, and only tty access
 is supported. This device can be used for memory access (read, erase and
 program), but CPU control is limited. The CPU may be halted, run and
 reset, but register access and breakpoints aren't supported.
 .IP "\fBpif\fR"
-Connect to a parallel-port JTAG controller. Currently, this driver is only
-supported for Linux. A parallel port device must be specified via the
+Connect to a parallel-port JTAG controller. JTAG mode must be used, and
+only tty access is supported. Currently, this driver is only supported
+on Linux, FreeBSD and DragonFly BSD. A parallel port device (ppdev on
+Linux, ppi on FreeBSD and DragonFly BSD) must be specified via the
 \fB-d\fR option.
+.IP "\fBgpio\fR"
+Connect to system gpios. JTAG mode must be used, and
+only tty access is supported. Currently, this driver is only supported
+on Linux, FreeBSD and DragonFly BSD. The gpios to used must defined using
+a string like "tdi=7 tdo=8 tms=9 tck=4" via the
+\fB-d\fR option. (dont forget the quotes)
+
+.IP "\fBload-bsl\fR"
+Connect to a USB bootloader. The stub bootloader will be used to load a
+fuller-featured bootloader into RAM for execution.
+.IP "\fBezfet\fR"
+This driver is for Texas Instruments' eZ-FET devices. It supports USB
+and tty access. It does not support breakpoint control.
+.IP "\fBrom-bsl\fR"
+This driver is for the old-style (ROM) bootstrap loader. It supports tty
+access only. Entry is attempted via the RTS/DTR signals. The default
+sequence is \fBDR,r,R,r,d,R:DR,r\fR, but you can override this with the
+\fB\-\-bsl\-entry\-sequence\fR option.
+
+\fBWARNING:\fR this driver unlocks the BSL by performing a mass erase.
+There are reports of this operation causing an erase of info A in some
+devices. Use at your own risk.
 .SH COMMANDS
 MSPDebug can accept commands either through an interactive prompt, or
 non-interactively when specified on the command line. The supported
@@ -195,6 +235,12 @@ Commands can be specified by giving the first few characters of the
 command name, provided that the prefix is unambiguous. Some commands
 support automatic repeat. For these commands, pressing enter at the
 reader prompt without typing anything will cause repeat execution.
+.IP "\fB!\fR [\fIcommand\fR [\fIargs ...\fR]]"
+Invoke an interactive operating system shell. If any arguments
+are specified, the first one is taken as a command to execute, with the
+rest of the arguments as the arguments to the command.
+
+This command is not yet available on non-POSIX systems.
 .IP "\fB=\fR \fIexpression\fR"
 Evaluate an address expression and show both its value, and the result
 when the value is looked up in reverse in the current symbol
@@ -214,6 +260,10 @@ Define a command alias. The text \fIcommand\fR will be substituted for
 a command plus arguments, if the entire text is wrapped in quotes when
 defining the alias. To avoid alias substitution when interpreting
 commands, prefix the command with \\ (a backslash character).
+.IP "\fBblow_jtag_fuse\fR"
+Blow the device's JTAG fuse.
+
+.B WARNING: this is an irreversible operation!
 .IP "\fBbreak\fR"
 Show a list of active breakpoints. Breakpoints can be added and removed
 with the \fBsetbreak\fR and \fBdelbreak\fR commands. Each breakpoint is
@@ -378,9 +428,6 @@ print another block of memory following that last printed.
 Write a sequence of bytes at the given memory address. The address given
 may be an address expression. Bytes values are two-digit hexadecimal
 numbers separated by spaces.
-
-Unless used in the simulation mode, this command can only be used for
-programming flash memory.
 .IP "\fBopt\fR [\fIname\fR] [\fIvalue\fR]"
 Query, set or list option variables. MSPDebug's behaviour can be configured
 using option variables, described below in the section \fBOPTIONS\fR.
@@ -719,6 +766,12 @@ BSL memory. If in doubt, do not enable this.
 If set, some drivers will allow erase/program access to the info A
 segment. If in doubt, do not enable this. Currently, the tilib and uif
 drivers are affected by this option.
+.IP "\fBenable_fuse_blow\fR"
+If set, some drivers will allow the JTAG security fuse to be blown.
+
+.B WARNING: this is an irreversible operation!
+
+If in doubt, do not enable this option.
 .IP "\fBgdb_default_port\fR (numeric)"
 This option controls the default TCP port for the GDB server, if no
 argument is given to the "\fBgdb\fR" command.

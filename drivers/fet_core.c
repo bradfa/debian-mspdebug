@@ -137,7 +137,7 @@ struct fet_device {
 
 static void show_dev_info(const char *name, const struct fet_device *dev)
 {
-	printc("Device: %s\n", name);
+	printc_dbg("Device: %s\n", name);
 	printc_dbg("Number of breakpoints: %d\n", dev->base.max_breakpoints);
 }
 
@@ -708,6 +708,13 @@ int fet_ctl(device_t dev_base, device_ctl_t action)
 				break;
 		}
 		break;
+
+	case DEVICE_CTL_SECURE:
+		if (fet_proto_xfer(&dev->proto, C_SECURE, NULL, 0, 0) < 0) {
+			printc_err("fet: failed to secure device\n");
+			return -1;
+		}
+		break;
 	}
 
 	return 0;
@@ -1037,7 +1044,7 @@ device_t fet_open(const struct device_args *args,
 
 	if (try_open(dev, args, fet_flags & FET_FORCE_RESET) < 0) {
 		delay_ms(500);
-		printc("Trying again...\n");
+		printc_dbg("Trying again...\n");
 		if (try_open(dev, args, !is_new_olimex(dev)) < 0)
 			goto fail;
 	}

@@ -94,7 +94,8 @@ static int set_nonstandard_rate(int fd, struct termios *attr, int rate)
 
 	return 0;
 }
-#elif defined(__OpenBSD__) || defined(__FreeBSD__) || defined(__NetBSD__)
+#elif defined(__OpenBSD__) || defined(__FreeBSD__) || \
+      defined(__NetBSD__) || defined(__DragonFly__)
 static int set_nonstandard_rate(int fd, struct termios *attr, int rate)
 {
 	cfsetispeed(attr, rate);
@@ -121,7 +122,17 @@ sport_t sport_open(const char *device, int rate, int flags)
 		return -1;
 
 	tcgetattr(fd, &attr);
+
+#ifdef __sun__
+	attr.c_iflag &= ~(IMAXBEL | IGNBRK | BRKINT | PARMRK | ISTRIP |
+			  INLCR | IGNCR | ICRNL | IXON);
+	attr.c_oflag &= ~OPOST;
+	attr.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+	attr.c_cflag &= ~(CSIZE | PARENB);
+	attr.c_cflag |= CS8;
+#else
 	cfmakeraw(&attr);
+#endif
 
 	if (rate_code >= 0) {
 		cfsetispeed(&attr, rate_code);

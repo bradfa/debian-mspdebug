@@ -29,12 +29,15 @@
 #include "output.h"
 #include "fet_error.h"
 #include "sport.h"
+#include "bsllib.h"
 
 struct flash_bsl_device {
 	struct device   base;
 
 	sport_t		serial_fd;
 	int		long_password;
+
+	const char	*seq;
 };
 
 #define MAX_BLOCK	256
@@ -547,75 +550,11 @@ static int flash_bsl_writemem(device_t dev_base,
 	return 0;
 }
 
-
-static void entry_delay(void)
-{
-	delay_ms(1);
-}
-
-static int enter_via_dtr_rts(struct flash_bsl_device *dev)
-{
-	/*
-	 * Implement the sequence shown on page 8 of TI document SLAU319A,
-	 * via serial-port control lines.
-	 */
-	sport_t fd = dev->serial_fd;
-
-	/* drive RST# line low */
-	if (sport_set_modem(fd, SPORT_MC_RTS | SPORT_MC_DTR) != 0) {
-		return -1;
-	}
-	entry_delay( );
-
-	/* drive TEST line high then low again */
-	if (sport_set_modem(fd, SPORT_MC_DTR) != 0) {
-		return -1;
-	}
-	entry_delay( );
-	if (sport_set_modem(fd, SPORT_MC_RTS | SPORT_MC_DTR) != 0) {
-		return -1;
-	}
-	entry_delay( );
-
-	/* drive TEST line high followed by RST# line */
-	if (sport_set_modem(fd, SPORT_MC_DTR) != 0) {
-		return -1;
-	}
-	entry_delay( );
-	if (sport_set_modem(fd, 0) != 0) {
-		return -1;
-	}
-	entry_delay( );
-	if (sport_set_modem(fd, SPORT_MC_RTS) != 0) {
-		return -1;
-	}
-	entry_delay( );
-
-
-	/* BSL should now be running! */
-	return 0;
-}
-
-static void exit_via_dtr_rts(struct flash_bsl_device *dev)
-{
-	sport_t fd = dev->serial_fd;
-
-	/* RST# and TEST LOW */
-        sport_set_modem(fd, SPORT_MC_RTS | SPORT_MC_DTR);
-
-	/* wait a brief period */
-	entry_delay( );
-
-	/* RST# HIGH */
-	sport_set_modem(fd, SPORT_MC_DTR);
-}
-
 static void flash_bsl_destroy(device_t dev_base)
 {
 	struct flash_bsl_device *dev = (struct flash_bsl_device *)dev_base;
 
-	exit_via_dtr_rts(dev);
-
+	bsllib_seq_do(dev->serial_fd, bsllib_seq_next(dev->seq));
 	sport_close(dev->serial_fd);
 	free(dev);
 }
@@ -651,11 +590,17 @@ static device_t flash_bsl_open(const struct device_args *args)
 		return NULL;
 	}
 
+	dev->seq = args->bsl_entry_seq;
+	if (!dev->seq)
+		dev->seq = "dR,r,R,r,R,D:dR,DR";
+
 	dev->long_password = args->flags & DEVICE_FLAG_LONG_PW;
 
 	/* enter bootloader */
-	if (enter_via_dtr_rts(dev) < 0)
+	if (bsllib_seq_do(dev->serial_fd, dev->seq) < 0) {
+		printc_err("BSL entry sequence failed\n");
 		goto fail;
+	}
 
 	delay_ms(500);
 

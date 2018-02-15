@@ -1,6 +1,6 @@
 /* MSPDebug - debugging tool for MSP430 MCUs
  * Copyright (C) 2009-2012 Daniel Beer
- * Copyright (C) 2012 Peter Bägel
+ * Copyright (C) 2012-2015 Peter Bägel
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,7 +20,9 @@
 /* Driver for parallel port interface like the Olimex MSP430-JTAG
  * Starting point was the goodfet driver
  *
- * 2012-10-03 Peter Bägel (DF5EQ)
+ * 2012-10-03 initial release		Peter Bägel (DF5EQ)
+ * 2014-12-26 single step implemented   Peter Bägel (DF5EQ)
+ * 2015-02-21 breakpoints implemented   Peter Bägel (DF5EQ)
  */
 
 #include <stdlib.h>
@@ -106,9 +108,7 @@ static int write_byte( struct jtdev *p,
   read_words(p, aligned, 2, data);
   data[addr & 1] = value;
 
-  if ( (addr >= 0x1000 && addr <= 0x10ff)
-       ||
-       addr >= 0x4000) {
+  if ( ADDR_IN_FLASH(addr) ) {
     /* program in FLASH */
     write_flash_block(p, aligned, 2, data);
   } else {
@@ -147,6 +147,43 @@ struct pif_device {
   struct device		base;
   struct jtdev		jtag;
 };
+
+/*----------------------------------------------------------------------------*/
+static int refresh_bps(struct pif_device *dev)
+{
+	int i;
+	int ret;
+	struct device_breakpoint *bp;
+	address_t addr;
+	ret = 0;
+
+	for (i = 0; i < dev->base.max_breakpoints; i++) {
+		bp = &dev->base.breakpoints[i];
+
+		printc_dbg("refresh breakpoint %d: type=%d "
+			   "addr=%04x flags=%04x\n",
+			   i, bp->type, bp->addr, bp->flags);
+
+		if ( (bp->flags &  DEVICE_BP_DIRTY) &&
+		     (bp->type  == DEVICE_BPTYPE_BREAK) ) {
+			addr = bp->addr;
+
+			if ( !(bp->flags & DEVICE_BP_ENABLED) ) {
+				addr = 0;
+			}
+
+			if ( jtag_set_breakpoint (&dev->jtag, i, addr) == 0) {
+				printc_err("pif: failed to refresh "
+					   "breakpoint #%d\n", i);
+				ret = -1;
+			} else {
+				bp->flags &= ~DEVICE_BP_DIRTY;
+			}
+		}
+	}
+
+	return ret;
+}
 
 /*----------------------------------------------------------------------------*/
 static int pif_readmem( device_t  dev_base,
@@ -212,9 +249,7 @@ static int pif_writemem( device_t       dev_base,
 
     /* Write aligned blocks */
     while (len >= 2) {
-      if ( (addr >= 0x1000 && addr <= 0x10ff)
-	   ||
-	   addr >= 0x4000) {
+      if ( ADDR_IN_FLASH(addr) ) {
 	if (write_flash_block(&dev->jtag, addr, len & ~1, mem) < 0)
 	  return -1;
 	addr += len & ~1;
@@ -281,6 +316,10 @@ static int pif_ctl(device_t dev_base, device_ctl_t type)
       break;
 
     case DEVICE_CTL_RUN:
+      /* transfer changed breakpoints to device */
+      if (refresh_bps(dev) < 0) {
+	return -1;
+      }
       /* start program execution at current PC */
       jtag_release_device(&dev->jtag, 0xffff);
       break;
@@ -291,7 +330,12 @@ static int pif_ctl(device_t dev_base, device_ctl_t type)
       break;
 
     case DEVICE_CTL_STEP:
-      printc_err("pif: single-stepping not implemented\n");
+      /* execute next instruction at current PC */
+      jtag_single_step(&dev->jtag);
+      break;
+
+    default:
+      printc_err("pif: unsupported operation\n");
       return -1;
   }
 
@@ -301,8 +345,14 @@ static int pif_ctl(device_t dev_base, device_ctl_t type)
 /*----------------------------------------------------------------------------*/
 static device_status_t pif_poll(device_t dev_base)
 {
+  struct pif_device *dev = (struct pif_device *)dev_base;
+
   if (delay_ms(100) < 0 || ctrlc_check())
     return DEVICE_STATUS_INTR;
+
+  if (jtag_cpu_state(&dev->jtag) == 1) {
+    return DEVICE_STATUS_HALTED;
+  }
 
   return DEVICE_STATUS_RUNNING;
 }
@@ -334,6 +384,8 @@ static int pif_erase( device_t dev_base,
 }
 
 /*----------------------------------------------------------------------------*/
+
+
 static device_t pif_open(const struct device_args *args)
 {
   struct pif_device *dev;
@@ -356,9 +408,10 @@ static device_t pif_open(const struct device_args *args)
 
   memset(dev, 0, sizeof(*dev));
   dev->base.type = &device_pif;
-  dev->base.max_breakpoints = 0;
+  dev->base.max_breakpoints = 2; //supported by all devices
+  (&dev->jtag)->f = &jtdev_func_pif;
 
-  if (jtdev_open(&dev->jtag, args->path) < 0) {
+  if ((&dev->jtag)->f->jtdev_open(&dev->jtag, args->path) < 0) {
     printc_err("pif: can't open port\n");
     free(dev);
     return NULL;
@@ -374,6 +427,49 @@ static device_t pif_open(const struct device_args *args)
 }
 
 /*----------------------------------------------------------------------------*/
+
+
+static device_t gpio_open(const struct device_args *args)
+{
+  struct pif_device *dev;
+
+  if (!(args->flags & DEVICE_FLAG_TTY)) {
+    printc_err("gpio: this driver does not support raw USB access\n");
+    return NULL;
+  }
+
+  if (!(args->flags & DEVICE_FLAG_JTAG)) {
+    printc_err("gpio: this driver does not support Spy-Bi-Wire\n");
+    return NULL;
+  }
+
+  dev = malloc(sizeof(*dev));
+  if (!dev) {
+    printc_err("gpio: malloc: %s\n", last_error());
+    return NULL;
+  }
+
+  memset(dev, 0, sizeof(*dev));
+  dev->base.type = &device_pif;
+  dev->base.max_breakpoints = 0;
+  (&dev->jtag)->f = &jtdev_func_gpio;
+
+  if ((&dev->jtag)->f->jtdev_open(&dev->jtag, args->path) < 0) {
+    printc_err("gpio: can't open port\n");
+    free(dev);
+    return NULL;
+  }
+
+  if (init_device(&dev->jtag) < 0) {
+    printc_err("gpio: initialization failed\n");
+    free(dev);
+    return NULL;
+  }
+
+  return &dev->base;
+}
+
+/*----------------------------------------------------------------------------*/
 static void pif_destroy(device_t dev_base)
 {
   struct pif_device *dev = (struct pif_device *)dev_base;
@@ -381,7 +477,7 @@ static void pif_destroy(device_t dev_base)
   dev->jtag.failed = 0;
 
   jtag_release_device(&dev->jtag, 0xfffe);
-  jtdev_close(&dev->jtag);
+  (&dev->jtag)->f->jtdev_close(&dev->jtag);
   free(dev);
 }
 
@@ -390,6 +486,20 @@ const struct device_class device_pif = {
   .name     = "pif",
   .help     = "Parallel Port JTAG",
   .open     = pif_open,
+  .destroy  = pif_destroy,
+  .readmem  = pif_readmem,
+  .writemem = pif_writemem,
+  .getregs  = pif_getregs,
+  .setregs  = pif_setregs,
+  .ctl      = pif_ctl,
+  .poll     = pif_poll,
+  .erase    = pif_erase
+};
+
+const struct device_class device_gpio = {
+  .name     = "gpio",
+  .help     = "/sys/class/gpio direct connect",
+  .open     = gpio_open,
   .destroy  = pif_destroy,
   .readmem  = pif_readmem,
   .writemem = pif_writemem,

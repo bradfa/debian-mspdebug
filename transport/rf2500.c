@@ -58,7 +58,7 @@ struct rf2500_transport {
 static int open_interface(struct rf2500_transport *tr,
 			  struct usb_device *dev, int ino)
 {
-	printc("Trying to open interface %d on %s\n", ino, dev->filename);
+	printc_dbg("Trying to open interface %d on %s\n", ino, dev->filename);
 
 	tr->int_number = ino;
 
@@ -192,7 +192,7 @@ static int usbtr_flush(transport_t tr_base)
 {
 	struct rf2500_transport *tr = (struct rf2500_transport *)tr_base;
 
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(__sun__)
 	char buf[64];
 
 	/* Flush out lingering data.
