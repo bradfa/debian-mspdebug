@@ -1,2 +1,2 @@
 version=3
-http://sf.net/mspdebug/mspdebug-(.*)\.tar\.gz
+http://github.com/dlbeer/mspdebug/releases .*v(.*)\.tar\.gz
