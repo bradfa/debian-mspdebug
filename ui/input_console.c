@@ -21,15 +21,9 @@
 #include <string.h>
 #include <ctype.h>
 
-#ifdef USE_READLINE
-#include <readline/readline.h>
-#include <readline/history.h>
-#endif
-
 #include "input_console.h"
 #include "util.h"
 
-#ifndef USE_READLINE
 #define LINE_BUF_SIZE 128
 
 static char *readline(const char *prompt)
@@ -66,9 +60,6 @@ static char *readline(const char *prompt)
 	return NULL;
 }
 
-#define add_history(x)
-#endif
-
 static int console_init(void)
 {
 	return 0;
@@ -84,9 +75,6 @@ static int console_read_command(char *out, int max_len)
 		printf("\n");
 		return 1;
 	}
-
-	if (*buf)
-		add_history(buf);
 
 	strncpy(out, buf, max_len);
 	out[max_len - 1] = 0;

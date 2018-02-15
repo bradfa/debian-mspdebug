@@ -28,13 +28,15 @@ LIBDIR = ${PREFIX}/lib/
 ifdef WITHOUT_READLINE
 	READLINE_CFLAGS =
 	READLINE_LIBS =
+	CONSOLE_INPUT_OBJ = ui/input_console.o
 else
 	READLINE_CFLAGS = -DUSE_READLINE
 	READLINE_LIBS = -lreadline
+	CONSOLE_INPUT_OBJ = ui/input_readline.o
 endif
 
 ifeq ($(OS),Windows_NT)
-    MSPDEBUG_CC = gcc
+    MSPDEBUG_CC = $(CC)
     BINARY = mspdebug.exe
 
     ifneq ($(UNAME_O),Cygwin)
@@ -60,16 +62,19 @@ else
     endif
 
     ifeq ($(UNAME_S),Darwin) # Mac OS X/MacPorts stuff
-	    PORTS_CFLAGS := -I/opt/local/include
-	    PORTS_LDFLAGS := -L/opt/local/lib
-    else
-      ifneq ($(filter $(UNAME_S),OpenBSD NetBSD DragonFly),)
-	    PORTS_CFLAGS := $(shell pkg-config --cflags libusb)
-	    PORTS_LDFLAGS := $(shell pkg-config --libs libusb) -ltermcap -pthread
+      ifeq ($(shell fink -V > /dev/null 2>&1 && echo ok),ok)
+	PORTS_CFLAGS := $(shell pkg-config --cflags libusb)
+	PORTS_LDFLAGS := $(shell pkg-config --libs libusb) -ltermcap -pthread
       else
-	    PORTS_CFLAGS :=
-	    PORTS_LDFLAGS :=
+	PORTS_CFLAGS := -I/opt/local/include
+	PORTS_LDFLAGS := -L/opt/local/lib
       endif
+    else ifneq ($(filter $(UNAME_S),OpenBSD NetBSD DragonFly),)
+	PORTS_CFLAGS := $(shell pkg-config --cflags libusb)
+	PORTS_LDFLAGS := $(shell pkg-config --libs libusb) -ltermcap -pthread
+    else
+	PORTS_CFLAGS :=
+	PORTS_LDFLAGS :=
     endif
 endif
 
@@ -166,6 +171,7 @@ OBJ=\
     drivers/fet3.o \
     drivers/bsllib.o \
     drivers/rom_bsl.o \
+    drivers/tilib_api.o \
     formats/binfile.o \
     formats/coff.o \
     formats/elf32.o \
@@ -191,8 +197,8 @@ OBJ=\
     ui/aliasdb.o \
     ui/power.o \
     ui/input.o \
-    ui/input_console.o \
     ui/input_async.o \
+    $(CONSOLE_INPUT_OBJ) \
     ui/main.o
 
 $(BINARY): $(OBJ)

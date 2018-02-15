@@ -38,11 +38,25 @@ int cmd_regs(char **arg)
 	address_t regs[DEVICE_NUM_REGS];
 	uint8_t code[16];
 	int len = sizeof(code);
+	int i;
 
 	(void)arg;
 
 	if (device_getregs(regs) < 0)
 		return -1;
+
+	/* Check for breakpoints */
+	for (i = 0; i < device_default->max_breakpoints; i++) {
+		const struct device_breakpoint *bp =
+		    &device_default->breakpoints[i];
+
+		if ((bp->flags & DEVICE_BP_ENABLED) &&
+		    (bp->type == DEVICE_BPTYPE_BREAK) &&
+		    (bp->addr == regs[MSP430_REG_PC]))
+			printc("Breakpoint %d triggered (0x%04x)\n",
+				i, bp->addr);
+	}
+
 	show_regs(regs);
 
 	/* Try to disassemble the instruction at PC */
@@ -220,6 +234,27 @@ int cmd_erase(char **arg)
 	return 0;
 }
 
+static int bp_poll(void)
+{
+	address_t regs[DEVICE_NUM_REGS];
+	int i;
+
+	if (device_getregs(regs) < 0)
+		return -1;
+
+	for (i = 0; i < device_default->max_breakpoints; i++) {
+		const struct device_breakpoint *bp =
+		    &device_default->breakpoints[i];
+
+		if ((bp->flags & DEVICE_BP_ENABLED) &&
+		    (bp->type == DEVICE_BPTYPE_BREAK) &&
+		    (bp->addr == regs[MSP430_REG_PC]))
+			return 1;
+	}
+
+	return 0;
+}
+
 int cmd_step(char **arg)
 {
 	char *count_text = get_arg(arg);
@@ -233,9 +268,22 @@ int cmd_step(char **arg)
 		}
 	}
 
-	for (i = 0; i < count; i++)
+	for (i = 0; i < count; i++) {
+		int r;
+
 		if (device_ctl(DEVICE_CTL_STEP) < 0)
 			return -1;
+
+		r = bp_poll();
+
+		if (r < 0)
+			return -1;
+
+		if (r) {
+			printc("Breakpoint hit after %d steps\n", i + 1);
+			break;
+		}
+	}
 
 	reader_set_repeat("step");
 	return cmd_regs(NULL);
@@ -579,21 +627,29 @@ static int do_cmd_prog(char **arg, int prog_flags)
 {
 	FILE *in;
 	struct prog_data prog;
+	const char *path_arg;
 	char * path;
+
+	path_arg = get_arg(arg);
+	if (!path_arg) {
+		printc_err("prog: you need to specify a filename\n");
+		return -1;
+	}
 
 	if (prompt_abort(MODIFY_SYMS))
 		return 0;
 
-	path = expand_tilde(*arg);
+	path = expand_tilde(path_arg);
 	if (!path)
 		return -1;
 
 	in = fopen(path, "rb");
-	free(path);
 	if (!in) {
-		printc_err("prog: %s: %s\n", *arg, last_error());
+		printc_err("prog: %s: %s\n", path, last_error());
+                free(path);
 		return -1;
 	}
+	free(path);
 
 	if (device_ctl(DEVICE_CTL_HALT) < 0) {
 		fclose(in);
