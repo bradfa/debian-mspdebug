@@ -32,6 +32,12 @@
 /* Disassembler
  */
 
+static address_t add_index(address_t reg_base, address_t index,
+			   int is_20bit)
+{
+	return (reg_base + index) & (is_20bit ? 0xfffff : 0xffff);
+}
+
 static int decode_00xx(const uint8_t *code, address_t len,
 		       struct msp430_instruction *insn)
 {
@@ -261,10 +267,13 @@ static int decode_single(const uint8_t *code, address_t offset,
 	case MSP430_AMODE_INDEXED:
 		need_arg = 1;
 		if (insn->dst_reg == MSP430_REG_PC) {
-			insn->dst_addr = offset + 2;
+			insn->dst_addr = offset + 4;
 			insn->dst_mode = MSP430_AMODE_SYMBOLIC;
-		} else if (insn->dst_reg == MSP430_REG_SR)
+		} else if (insn->dst_reg == MSP430_REG_SR) {
 			insn->dst_mode = MSP430_AMODE_ABSOLUTE;
+		} else if (insn->dst_reg == MSP430_REG_R3) {
+			need_arg = 0; /* constant generator: #1 */
+		}
 		break;
 
 	case MSP430_AMODE_INDIRECT: break;
@@ -283,7 +292,8 @@ static int decode_single(const uint8_t *code, address_t offset,
 		if (size < 4)
 			return -1;
 
-		insn->dst_addr += (code[3] << 8) | code[2];
+		insn->dst_addr = add_index(insn->dst_addr,
+			(code[3] << 8) | code[2], 0);
 		return 4;
 	}
 
@@ -296,13 +306,15 @@ static int decode_single(const uint8_t *code, address_t offset,
  * could not be found.
  */
 static int decode_double(const uint8_t *code, address_t offset,
-			 address_t size, struct msp430_instruction *insn)
+			 address_t size, struct msp430_instruction *insn,
+			 uint16_t ex_word)
 {
 	uint16_t op = (code[1] << 8) | code[0];
 	int need_src = 0;
 	int need_dst = 0;
 	int ret = 2;
 
+	/* Decode and consume opcode */
 	insn->itype = MSP430_ITYPE_DOUBLE;
 	insn->op = op & 0xf000;
 	insn->dsize = (op & 0x0040) ? MSP430_DSIZE_BYTE : MSP430_DSIZE_WORD;
@@ -313,21 +325,11 @@ static int decode_double(const uint8_t *code, address_t offset,
 	insn->dst_mode = (op >> 7) & 0x1;
 	insn->dst_reg = op & 0xf;
 
-	switch (insn->dst_mode) {
-	case MSP430_AMODE_REGISTER: break;
-	case MSP430_AMODE_INDEXED:
-		need_dst = 1;
+	offset += 2;
+	code += 2;
+	size -= 2;
 
-		if (insn->dst_reg == MSP430_REG_PC) {
-			insn->dst_mode = MSP430_AMODE_SYMBOLIC;
-			insn->dst_addr = offset + 2;
-		} else if (insn->dst_reg == MSP430_REG_SR)
-			insn->dst_mode = MSP430_AMODE_ABSOLUTE;
-		break;
-
-	default: break;
-	}
-
+	/* Decode and consume source operand */
 	switch (insn->src_mode) {
 	case MSP430_AMODE_REGISTER: break;
 	case MSP430_AMODE_INDEXED:
@@ -335,7 +337,7 @@ static int decode_double(const uint8_t *code, address_t offset,
 
 		if (insn->src_reg == MSP430_REG_PC) {
 			insn->src_mode = MSP430_AMODE_SYMBOLIC;
-			insn->dst_addr = offset + 2;
+			insn->src_addr = offset;
 		} else if (insn->src_reg == MSP430_REG_SR)
 			insn->src_mode = MSP430_AMODE_ABSOLUTE;
 		else if (insn->src_reg == MSP430_REG_R3)
@@ -354,26 +356,44 @@ static int decode_double(const uint8_t *code, address_t offset,
 	default: break;
 	}
 
-	offset += 2;
-	code += 2;
-	size -= 2;
-
 	if (need_src) {
 		if (size < 2)
 			return -1;
 
-		insn->src_addr += (code[1] << 8) | code[0];
+		insn->src_addr = add_index(insn->src_addr,
+			((ex_word << 9) & 0xf0000) |
+			((code[1] << 8) | code[0]),
+			ex_word);
 		offset += 2;
 		code += 2;
 		size -= 2;
 		ret += 2;
 	}
 
+	/* Decode and consume destination operand */
+	switch (insn->dst_mode) {
+	case MSP430_AMODE_REGISTER: break;
+	case MSP430_AMODE_INDEXED:
+		need_dst = 1;
+
+		if (insn->dst_reg == MSP430_REG_PC) {
+			insn->dst_mode = MSP430_AMODE_SYMBOLIC;
+			insn->dst_addr = offset;
+		} else if (insn->dst_reg == MSP430_REG_SR)
+			insn->dst_mode = MSP430_AMODE_ABSOLUTE;
+		break;
+
+	default: break;
+	}
+
 	if (need_dst) {
 		if (size < 2)
 			return -1;
 
-		insn->dst_addr += (code[1] << 8) | code[0];
+		insn->dst_addr = add_index(insn->dst_addr,
+			((ex_word << 16) & 0xf0000) |
+			(code[1] << 8) | code[0],
+			ex_word);
 		ret += 2;
 	}
 
@@ -763,7 +783,7 @@ int dis_decode(const uint8_t *code, address_t offset, address_t len,
 		op = (code[1] << 8) | code[0];
 
 		if ((op & 0xf000) >= 0x4000)
-			ret = decode_double(code, offset, len, insn);
+			ret = decode_double(code, offset, len, insn, ex_word);
 		else if ((op & 0xf000) == 0x1000 && (op & 0xfc00) < 0x1280)
 			ret = decode_single(code, offset, len, insn);
 		else
@@ -782,9 +802,6 @@ int dis_decode(const uint8_t *code, address_t offset, address_t len,
 			}
 			insn->rep_register = (ex_word >> 7) & 1;
 			insn->rep_index = ex_word & 0xf;
-		} else {
-			insn->dst_addr |= (ex_word & 0xf) << 16;
-			insn->src_addr |= ((ex_word >> 7) & 0xf) << 16;
 		}
 
 		if (!(ex_word & 0x40))
@@ -801,7 +818,7 @@ int dis_decode(const uint8_t *code, address_t offset, address_t len,
 		else if ((op & 0xf000) >= 0x2000 && (op & 0xf000) < 0x4000)
 			ret = decode_jump(code, offset, insn);
 		else if ((op & 0xf000) >= 0x4000)
-			ret = decode_double(code, offset, len, insn);
+			ret = decode_double(code, offset, len, insn, 0);
 		else
 			return -1;
 	}

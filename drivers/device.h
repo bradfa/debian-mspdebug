@@ -30,7 +30,8 @@ typedef enum {
 	DEVICE_CTL_RESET,
 	DEVICE_CTL_RUN,
 	DEVICE_CTL_HALT,
-	DEVICE_CTL_STEP
+	DEVICE_CTL_STEP,
+	DEVICE_CTL_SECURE
 } device_ctl_t;
 
 typedef enum {
@@ -70,6 +71,7 @@ struct device_breakpoint {
 #define DEVICE_FLAG_TTY		0x04 /* default is USB */
 #define DEVICE_FLAG_FORCE_RESET	0x08
 #define DEVICE_FLAG_DO_FWUPDATE 0x10
+#define DEVICE_FLAG_SKIP_CLOSE	0x20
 
 struct device_args {
 	int			flags;
@@ -78,6 +80,10 @@ struct device_args {
 	const char		*forced_chip_id;
 	const char		*requested_serial;
 	const char		*require_fwupdate;
+	const char		*bsl_entry_seq;
+	int			bsl_gpio_used;
+	int			bsl_gpio_rts;
+	int			bsl_gpio_dtr;
 };
 
 struct device_class {

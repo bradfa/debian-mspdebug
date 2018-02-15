@@ -177,13 +177,24 @@ const struct cmddb_record commands[] = {
  "    Reset (and halt) the CPU.\n"
 	},
 	{
+		.name = "blow_jtag_fuse",
+		.func = cmd_blow_jtag_fuse,
+		.help =
+"blow-jtag-fuse\n"
+"    Blow the device's JTAG fuse.\n"
+"\n"
+"    \x1b[1mWARNING: this is an irreversible operation!\x1b[0m\n"
+	},
+	{
 		.name = "erase",
 		.func = cmd_erase,
 		.help =
 "erase [all|segment] [address]\n"
+"erase segrange <address> <size> <seg-size>\n"
 "    Erase the device under test. With no arguments, erases all of main\n"
 "    memory. Specify arguments to perform a mass erase, or to erase\n"
-"    individual segments.\n"
+"    individual segments. The \"segrange\" mode is used to erase an\n"
+"    address range via a series of segment erases.\n"
 	},
 	{
 		.name = "step",
@@ -284,13 +295,6 @@ const struct cmddb_record commands[] = {
 "    of all functions if no function address is given.\n"
 	},
 	{
-		.name = "locka",
-		.func = cmd_locka,
-		.help =
-"locka [set|clear]\n"
-"    Show or change the status of the LOCKA flash write-protect bit.\n"
-	},
-	{
 		.name = "exit",
 		.func = cmd_exit,
 		.help =
@@ -350,7 +354,16 @@ const struct cmddb_record commands[] = {
 "    Write session data for the given session to a CSV file.\n"
 "power profile\n"
 "    List power profile data by symbol.\n"
-	}
+	},
+#ifndef NO_SHELLCMD
+	{
+		.name = "!",
+		.func = cmd_shellcmd,
+		.help =
+"! [command [args ...]]\n"
+"    Invoke an interactive shell, optionally execute command.\n"
+	},
+#endif /* !NO_SHELLCMD */
 };
 
 int cmddb_get(const char *name, struct cmddb_record *ret)

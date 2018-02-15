@@ -77,3 +77,13 @@ Stanimir Bonev <bonev_st@abv.bg>:
 
 Peter Bägel <peter@baegel.de>:
 	* JTAG interface library and parallel-port JTAG driver.
+
+Jose Angel Caso Sanchez <altomaltes@gmail.com>:
+	* FET v2 database from MSP430.DLL.
+
+Paolo Zebelloni <p.zebelloni@c-labs.it>:
+	* Testing, debugging and research for the ROM BSL driver.
+	* BSL entry via GPIOs.
+
+Jan Willeke <willeke@smartmote.de>:
+	* GPIO JTAG driver.

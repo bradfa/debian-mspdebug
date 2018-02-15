@@ -1,3 +1,29 @@
+Version 0.23 - 2 Mar 2015
+	* Support for raw JTAG via GPIOs.
+	* Raw JTAG drivers now support single stepping and breakpoints.
+	* Support for MSP430F5xx USB bootloader.
+	* Added experimental fet3/eZ-FET driver.
+	* Added "blow_jtag_fuse" command.
+	* Added "!" command for dropping to a shell.
+	* flash_bsl now allows custom entry/exit sequences.
+	* Added ROM BSL driver.
+	* Add support for BSL entry via GPIO toggling.
+	* Many bug and portability fixes.
+
+Version 0.22 - 18 Jul 2013
+	* Support for erasing/programming information and bootloader
+	  flash memories.
+	* Support for new chips: MSP430G2352, MSP430FG4616,
+	  MSP430FR5728, MSP430G2955, MSP430FR5729.
+	* Windows build fixes.
+	* Various fixes for disassembly and simulation of some types of
+	  instructions.
+	* Fixed segment erase for FET-like and tilib drivers.
+	* Support for alternative and directory-local configuration
+	  files.
+	* Fixes for Intel HEX file generation.
+	* Fixed drivers for Olimex MSP430-JTAG-TINY rev 1.
+
 Version 0.21 - 26 Nov 2012
 	* Support for flat binary files.
 	* Bug fixes and refactoring of drivers.

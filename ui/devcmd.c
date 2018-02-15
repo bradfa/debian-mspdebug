@@ -31,6 +31,7 @@
 #include "util.h"
 #include "prog.h"
 #include "dis.h"
+#include "opdb.h"
 
 int cmd_regs(char **arg)
 {
@@ -147,6 +148,8 @@ int cmd_erase(char **arg)
 	const char *seg_text = get_arg(arg);
 	device_erase_type_t type = DEVICE_ERASE_MAIN;
 	address_t segment = 0;
+	address_t total_size = 0;
+	address_t segment_size = 0;
 
 	if (seg_text && expr_eval(seg_text, &segment) < 0) {
 		printc_err("erase: invalid expression: %s\n", seg_text);
@@ -163,6 +166,33 @@ int cmd_erase(char **arg)
 					   "address\n");
 				return -1;
 			}
+		} else if (!strcasecmp(type_text, "segrange")) {
+			const char *total_text = get_arg(arg);
+			const char *ss_text = get_arg(arg);
+
+			if (!(total_text && ss_text)) {
+				printc_err("erase: you must specify "
+					   "total and segment sizes\n");
+				return -1;
+			}
+
+			if (expr_eval(total_text, &total_size) < 0) {
+				printc_err("erase: invalid expression: %s\n",
+					   total_text);
+				return -1;
+			}
+
+			if (expr_eval(ss_text, &segment_size) < 0) {
+				printc_err("erase: invalid expression: %s\n",
+					   ss_text);
+				return -1;
+			}
+
+			if (segment_size > 0x200 || segment_size < 0x40) {
+				printc_err("erase: invalid segment size: "
+					   "0x%x\n", segment_size);
+				return -1;
+			}
 		} else {
 			printc_err("erase: unknown erase type: %s\n",
 				    type_text);
@@ -173,8 +203,21 @@ int cmd_erase(char **arg)
 	if (device_ctl(DEVICE_CTL_HALT) < 0)
 		return -1;
 
-	printc("Erasing...\n");
-	return device_erase(type, segment);
+	if (!segment_size) {
+		printc("Erasing...\n");
+		return device_erase(type, segment);
+	} else {
+		printc("Erasing segments...\n");
+		while (total_size >= segment_size) {
+			printc_dbg("Erasing 0x%04x...\n", segment);
+			if (device_erase(DEVICE_ERASE_SEGMENT, segment) < 0)
+				return -1;
+			total_size -= segment_size;
+			segment += segment_size;
+		}
+	}
+
+	return 0;
 }
 
 int cmd_step(char **arg)
@@ -329,6 +372,15 @@ int cmd_dis(char **arg)
 	return 0;
 }
 
+
+#define IHEX_REC_DATA 0x00
+#define IHEX_REC_EOF  0x01
+#define IHEX_REC_ESAR 0x02
+#define IHEX_REC_SSAR 0x03
+#define IHEX_REC_ELAR 0x04
+#define IHEX_REC_SLAR 0x05
+#define IHEX_SEG(addr) (((addr) >> 16) & 0xFFFF)
+
 struct hexout_data {
 	FILE            *file;
 	address_t       addr;
@@ -361,17 +413,18 @@ static int hexout_start(struct hexout_data *hexout, const char *filename)
 	return 0;
 }
 
-static int hexout_write(FILE *out, int len, uint16_t addr,
+static int hexout_write(FILE *out, uint8_t type, int len, uint16_t addr,
 			const uint8_t *payload)
 {
 	int i;
 	int cksum = 0;
 
-	if (fprintf(out, ":%02X%04X00", len, addr) < 0)
+	if (fprintf(out, ":%02X%04X%02X", len, addr, type) < 0)
 		goto fail;
 	cksum += len;
 	cksum += addr & 0xff;
 	cksum += addr >> 8;
+	cksum += type;
 
 	for (i = 0; i < len; i++) {
 		if (fprintf(out, "%02X", payload[i]) < 0)
@@ -391,29 +444,43 @@ fail:
 
 static int hexout_flush(struct hexout_data *hexout)
 {
-        address_t addr_low = hexout->addr & 0xffff;
-	address_t segoff = hexout->addr >> 16;
+	while (hexout->len) {
+		address_t addr_low = hexout->addr & 0xffff;
+		address_t segoff = IHEX_SEG(hexout->addr);
 
-	if (!hexout->len)
-		return 0;
+		if (segoff != hexout->segoff) {
+			uint8_t offset_data[] = {segoff >> 8, segoff & 0xff};
 
-	if (segoff != hexout->segoff) {
-		uint8_t offset_data[] = {segoff >> 8, segoff & 0xff};
+			if (hexout_write(hexout->file, IHEX_REC_ELAR,
+				2, 0, offset_data) < 0)
+				return -1;
+			hexout->segoff = segoff;
+		}
 
-		if (hexout_write(hexout->file, 2, 0, offset_data) < 0)
+		uint32_t writesize = hexout->len;
+
+		/* If the hexout buffer will wrap past the end of segment;
+		 * only write until the end of the segment to allow
+		 * emitting an ELAR record */
+		if (IHEX_SEG(hexout->addr + writesize) != segoff)
+			writesize = 0x10000 - addr_low;
+
+		if (hexout_write(hexout->file, IHEX_REC_DATA, writesize, addr_low,
+				hexout->buf) < 0)
 			return -1;
-		hexout->segoff = segoff;
+
+		hexout->len -= writesize;
+		hexout->addr += writesize;
+
+		memmove(hexout->buf, hexout->buf + writesize,
+			sizeof(hexout->buf) - writesize);
 	}
 
-	if (hexout_write(hexout->file, hexout->len, addr_low,
-			 hexout->buf) < 0)
-		return -1;
-	hexout->len = 0;
 	return 0;
 }
 
 static int hexout_feed(struct hexout_data *hexout,
-		       uint16_t addr, const uint8_t *buf, int len)
+		       uint32_t addr, const uint8_t *buf, int len)
 {
 	while (len) {
 		int count;
@@ -484,6 +551,12 @@ int cmd_hexout(char **arg)
 
 	if (hexout_flush(&hexout) < 0)
 		goto fail;
+
+	if (hexout_write(hexout.file, IHEX_REC_EOF, 0, 0, NULL) < 0) {
+		pr_error("hexout: failed to write terminator\n");
+		goto fail;
+	}
+
 	if (fclose(hexout.file) < 0) {
 		pr_error("hexout: error on close");
 		return -1;
@@ -674,7 +747,7 @@ int cmd_break(char **arg)
 		if (bp->flags & DEVICE_BP_ENABLED) {
 			char name[128];
 
-			print_address(bp->addr, name, sizeof(name));
+			print_address(bp->addr, name, sizeof(name), 0);
 			printc("    %d. %s", i, name);
 
 			switch (bp->type) {
@@ -697,60 +770,6 @@ int cmd_break(char **arg)
 		}
 	}
 
-	return 0;
-}
-
-#define FCTL3		0x012c
-#define FCTL3_LOCKA	0x40
-#define FWKEY		0xa5
-#define FRKEY           0x96
-
-int cmd_locka(char **arg)
-{
-	const char *status = get_arg(arg);
-	int value = 0;
-	uint8_t regval[2];
-
-	if (status) {
-		if (!strcasecmp(status, "set")) {
-			value = FCTL3_LOCKA;
-		} else if (!strcasecmp(status, "clear")) {
-			value = 0;
-		} else {
-			printc_err("locka: unknown action: %s\n", status);
-			return -1;
-		}
-	}
-
-	if (device_readmem(FCTL3, regval, 2) < 0) {
-		printc_err("locka: can't read FCTL3 register\n");
-		return -1;
-	}
-
-	if (regval[1] != FRKEY) {
-		printc_err("warning: locka: read key invalid (got 0x%02x)\n",
-			   regval[1]);
-		return -1;
-	}
-
-	if (status && ((regval[0] & FCTL3_LOCKA) != value)) {
-		printc_dbg("Toggling LOCKA bit\n");
-
-		regval[0] |= FCTL3_LOCKA;
-		regval[1] = FWKEY;
-
-		if (device_writemem(FCTL3, regval, 2) < 0) {
-			printc_err("locka: can't write FCTL3 register\n");
-			return -1;
-		}
-
-		if (device_readmem(FCTL3, regval, 2) < 0) {
-			printc_err("locka: can't read FCTL3 register\n");
-			return -1;
-		}
-	}
-
-	printc("LOCKA is %s\n", (regval[0] & FCTL3_LOCKA) ? "set" : "clear");
 	return 0;
 }
 
@@ -813,4 +832,22 @@ int cmd_fill(char **arg)
 	}
 
 	return 0;
+}
+
+int cmd_blow_jtag_fuse(char **arg)
+{
+	(void)arg;
+
+	if (!opdb_get_boolean("enable_fuse_blow")) {
+		printc_err(
+"blow_jtag_fuse: fuse blow has not been enabled.\n"
+"\n"
+"If you really want to blow the JTAG fuse, you need to set the option\n"
+"\"enable_fuse_blow\" first. If in doubt, do not do this.\n"
+"\n"
+"\x1b[1mWARNING: this is in irreversible operation!\x1b[0m\n");
+		return -1;
+	}
+
+	return device_ctl(DEVICE_CTL_SECURE);
 }

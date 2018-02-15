@@ -20,6 +20,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
+#include <sys/time.h>
 
 #include "sport.h"
 #include "util.h"
@@ -33,6 +34,8 @@
 #define TIMEOUT_S	30
 
 #ifndef __Windows__
+
+#include <sys/select.h>
 
 #ifndef B460800
 #define B460800 460800
@@ -91,7 +94,8 @@ static int set_nonstandard_rate(int fd, struct termios *attr, int rate)
 
 	return 0;
 }
-#elif defined(__OpenBSD__) || defined(__FreeBSD__) || defined(__NetBSD__)
+#elif defined(__OpenBSD__) || defined(__FreeBSD__) || \
+      defined(__NetBSD__) || defined(__DragonFly__)
 static int set_nonstandard_rate(int fd, struct termios *attr, int rate)
 {
 	cfsetispeed(attr, rate);
@@ -118,7 +122,17 @@ sport_t sport_open(const char *device, int rate, int flags)
 		return -1;
 
 	tcgetattr(fd, &attr);
+
+#ifdef __sun__
+	attr.c_iflag &= ~(IMAXBEL | IGNBRK | BRKINT | PARMRK | ISTRIP |
+			  INLCR | IGNCR | ICRNL | IXON);
+	attr.c_oflag &= ~OPOST;
+	attr.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
+	attr.c_cflag &= ~(CSIZE | PARENB);
+	attr.c_cflag |= CS8;
+#else
 	cfmakeraw(&attr);
+#endif
 
 	if (rate_code >= 0) {
 		cfsetispeed(&attr, rate_code);
@@ -252,6 +266,8 @@ int sport_set_modem(sport_t s, int bits)
 static int xfer_wait(sport_t s, LPOVERLAPPED ovl)
 {
 	DWORD result = 0;
+
+	ResetEvent(ctrlc_win32_event());
 
 	while (!GetOverlappedResult(s, ovl, &result, FALSE)) {
 		DWORD r;

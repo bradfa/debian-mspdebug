@@ -2,6 +2,10 @@
  * Copyright (C) 2009-2012 Daniel Beer
  * Copyright (C) 2012 Peter Bägel
  *
+ * ppdev/ppi abstraction inspired by uisp src/DARPA.C
+ *   originally written by Sergey Larin;
+ *   corrected by Denis Chertykov, Uros Platise and Marek Michalkiewicz.
+ *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation; either version 2 of the License, or
@@ -21,12 +25,41 @@
 #include "jtdev.h"
 #include "output.h"
 
-#ifdef __linux__
+#if defined(__linux__) || \
+    ( defined(__FreeBSD__) || defined(__DragonFly__) )
 /*===== includes =============================================================*/
 
 #include <fcntl.h>
 #include <unistd.h>
+
+#if defined(__linux__)
+
 #include <linux/ppdev.h>
+
+#define par_claim(fd)			ioctl(fd, PPCLAIM, NULL)
+#define par_write_data(fd, ptr)		ioctl(fd, PPWDATA, ptr)
+#define par_write_control(fd, ptr)	ioctl(fd, PPWCONTROL, ptr)
+#define par_release(fd)			ioctl(fd, PPRELEASE, NULL)
+#define par_read_status(fd, ptr)	ioctl(fd, PPRSTATUS, ptr)
+
+#elif defined(__FreeBSD__) || defined(__DragonFly__)
+
+#if defined(__FreeBSD__)
+#include <dev/ppbus/ppi.h>
+#include <dev/ppbus/ppbconf.h>
+#else /* __DragonFly__ */
+#include <dev/misc/ppi/ppi.h>
+#include <bus/ppbus/ppbconf.h>
+#endif
+
+#define par_claim(fd)			(0)
+#define par_write_data(fd, ptr)		ioctl(fd, PPISDATA, ptr)
+#define par_write_control(fd, ptr)	ioctl(fd, PPISCTRL, ptr)
+#define par_release(fd)			(0)
+#define par_read_status(fd, ptr)	ioctl(fd, PPIGSTATUS, ptr)
+
+#endif /* __linux__ || (__FreeBSD__ || __DragonFly__) */
+
 #include <sys/ioctl.h>
 
 #include "util.h"
@@ -51,10 +84,18 @@
 #define BUSY ((unsigned char)0x80)
 
 /*--- port control (out) ---*/
+#ifndef STROBE
 #define STROBE   ((unsigned char)0x01) /* inverted by PC-hardware */
+#endif
+#ifndef AUTOFEED
 #define AUTOFEED ((unsigned char)0x02)
+#endif
+#ifndef INIT
 #define INIT     ((unsigned char)0x04)
+#endif
+#ifndef SELECTIN
 #define SELECTIN ((unsigned char)0x08)
+#endif
 #define IRQEN    ((unsigned char)0x10)
 
 /*--- JTAG signal mapping ---*/
@@ -76,21 +117,21 @@
 
 static void do_ppwdata(struct jtdev *p)
 {
-	if (ioctl(p->port, PPWDATA, &p->data_register) < 0) {
-		pr_error("ioctl: PPWDATA");
+	if (par_write_data(p->port, &p->data_register) < 0) {
+		pr_error("jtdev: par_write_data");
 		p->failed = 1;
 	}
 }
 
 static void do_ppwcontrol(struct jtdev *p)
 {
-	if (ioctl(p->port, PPWCONTROL, &p->control_register) < 0) {
-		pr_error("ioctl: PPWCONTROL");
+	if (par_write_control(p->port, &p->control_register) < 0) {
+		pr_error("jtdev: par_write_control");
 		p->failed = 1;
 	}
 }
 
-int jtdev_open(struct jtdev *p, const char *device)
+static int jtpif_open(struct jtdev *p, const char *device)
 {
 	p->port = open(device, O_RDWR);
 	if (p->port < 0) {
@@ -99,8 +140,8 @@ int jtdev_open(struct jtdev *p, const char *device)
 		return -1;
 	}
 
-	if (ioctl(p->port, PPCLAIM, NULL) < 0) {
-		printc_err("jtdev: PPCLAIM: %s: %s\n",
+	if (par_claim(p->port) < 0) {
+		printc_err("jtdev: par_claim: %s: %s\n",
 			   device, last_error());
 		close(p->port);
 		return -1;
@@ -116,22 +157,22 @@ int jtdev_open(struct jtdev *p, const char *device)
 	return 0;
 }
 
-void jtdev_close(struct jtdev *p)
+static void jtpif_close(struct jtdev *p)
 {
-	if (ioctl(p->port, PPRELEASE, NULL) < 0)
+	if (par_release(p->port) < 0)
 		pr_error("warning: jtdev: failed to release port");
 
 	close(p->port);
 }
 
-void jtdev_power_on(struct jtdev *p)
+static void jtpif_power_on(struct jtdev *p)
 {
 	/* power supply on */
 	p->data_register |= POWER;
 	do_ppwdata(p);
 }
 
-void jtdev_power_off(struct jtdev *p)
+static void jtpif_power_off(struct jtdev *p)
 {
 	/* power supply off */
 	p->data_register &= ~POWER;
@@ -143,19 +184,19 @@ void jtdev_power_off(struct jtdev *p)
 	do_ppwcontrol(p);
 }
 
-void jtdev_connect(struct jtdev *p)
+static void jtpif_connect(struct jtdev *p)
 {
 	p->control_register |= (TEST | ENABLE);
 	do_ppwcontrol(p);
 }
 
-void jtdev_release(struct jtdev *p)
+static void jtpif_release(struct jtdev *p)
 {
 	p->control_register &= ~(TEST | ENABLE);
 	do_ppwcontrol(p);
 }
 
-void jtdev_tck(struct jtdev *p, int out)
+static void jtpif_tck(struct jtdev *p, int out)
 {
 	if (out)
 		p->data_register |= TCK;
@@ -165,7 +206,7 @@ void jtdev_tck(struct jtdev *p, int out)
 	do_ppwdata(p);
 }
 
-void jtdev_tms(struct jtdev *p, int out)
+static void jtpif_tms(struct jtdev *p, int out)
 {
 	if (out)
 		p->data_register |= TMS;
@@ -175,7 +216,7 @@ void jtdev_tms(struct jtdev *p, int out)
 	do_ppwdata(p);
 }
 
-void jtdev_tdi(struct jtdev *p, int out)
+static void jtpif_tdi(struct jtdev *p, int out)
 {
 	if (out)
 		p->data_register |= TDI;
@@ -185,7 +226,7 @@ void jtdev_tdi(struct jtdev *p, int out)
 	do_ppwdata(p);
 }
 
-void jtdev_rst(struct jtdev *p, int out)
+static void jtpif_rst(struct jtdev *p, int out)
 {
 	/* reset pin is inverted by PC hardware */
 	if (out)
@@ -196,7 +237,7 @@ void jtdev_rst(struct jtdev *p, int out)
 	do_ppwcontrol(p);
 }
 
-void jtdev_tst(struct jtdev *p, int out)
+static void jtpif_tst(struct jtdev *p, int out)
 {
 	if (out)
 		p->control_register |= TEST;
@@ -206,12 +247,12 @@ void jtdev_tst(struct jtdev *p, int out)
 	do_ppwcontrol(p);
 }
 
-int jtdev_tdo_get(struct jtdev *p)
+static int jtpif_tdo_get(struct jtdev *p)
 {
 	uint8_t input;
 
-	if (ioctl(p->port, PPRSTATUS, &input) < 0) {
-		pr_error("ioctl: PPRSTATUS");
+	if (par_read_status(p->port, &input) < 0) {
+		pr_error("jtdev: par_read_status:");
 		p->failed = 1;
 		return 0;
 	}
@@ -219,7 +260,7 @@ int jtdev_tdo_get(struct jtdev *p)
 	return (input & TDO) ? 1 : 0;
 }
 
-void jtdev_tclk(struct jtdev *p, int out)
+static void jtpif_tclk(struct jtdev *p, int out)
 {
 	if (out)
 		p->data_register |= TCLK;
@@ -229,25 +270,25 @@ void jtdev_tclk(struct jtdev *p, int out)
 	do_ppwdata(p);
 }
 
-int jtdev_tclk_get(struct jtdev *p)
+static int jtpif_tclk_get(struct jtdev *p)
 {
 	return (p->data_register & TCLK) ? 1 : 0;
 }
 
-void jtdev_tclk_strobe(struct jtdev *p, unsigned int count)
+static void jtpif_tclk_strobe(struct jtdev *p, unsigned int count)
 {
 	int i;
 
 	for (i = 0; i < count; i++) {
-		jtdev_tclk(p, 1);
-		jtdev_tclk(p, 0);
+		jtpif_tclk(p, 1);
+		jtpif_tclk(p, 0);
 
 		if (p->failed)
 			return;
 	}
 }
 
-void jtdev_led_green(struct jtdev *p, int out)
+static void jtpif_led_green(struct jtdev *p, int out)
 {
 	if (out)
 		p->data_register |= LED_GREEN;
@@ -257,7 +298,7 @@ void jtdev_led_green(struct jtdev *p, int out)
 	do_ppwdata(p);
 }
 
-void jtdev_led_red(struct jtdev *p, int out)
+static void jtpif_led_red(struct jtdev *p, int out)
 {
 	if (out)
 		p->data_register |= LED_RED;
@@ -267,31 +308,52 @@ void jtdev_led_red(struct jtdev *p, int out)
 	do_ppwdata(p);
 }
 #else /* __linux__ */
-int jtdev_open(struct jtdev *p, const char *device)
+static int jtpif_open(struct jtdev *p, const char *device)
 {
-	printc_err("jtdev: driver is only supported for Linux\n");
+	printc_err("jtdev: driver is not supported on this platform\n");
 	p->failed = 1;
 	return -1;
 }
 
-void jtdev_close(struct jtdev *p) { }
+static void jtpif_close(struct jtdev *p) { }
 
-void jtdev_power_on(struct jtdev *p) { }
-void jtdev_power_off(struct jtdev *p) { }
-void jtdev_connect(struct jtdev *p) { }
-void jtdev_release(struct jtdev *p) { }
+static void jtpif_power_on(struct jtdev *p) { }
+static void jtpif_power_off(struct jtdev *p) { }
+static void jtpif_connect(struct jtdev *p) { }
+static void jtpif_release(struct jtdev *p) { }
 
-void jtdev_tck(struct jtdev *p, int out) { }
-void jtdev_tms(struct jtdev *p, int out) { }
-void jtdev_tdi(struct jtdev *p, int out) { }
-void jtdev_rst(struct jtdev *p, int out) { }
-void jtdev_tst(struct jtdev *p, int out) { }
-int jtdev_tdo_get(struct jtdev *p) { return 0; }
+static void jtpif_tck(struct jtdev *p, int out) { }
+static void jtpif_tms(struct jtdev *p, int out) { }
+static void jtpif_tdi(struct jtdev *p, int out) { }
+static void jtpif_rst(struct jtdev *p, int out) { }
+static void jtpif_tst(struct jtdev *p, int out) { }
+static int jtpif_tdo_get(struct jtdev *p) { return 0; }
 
-void jtdev_tclk(struct jtdev *p, int out) { }
-int jtdev_tclk_get(struct jtdev *p) { return 0; }
-void jtdev_tclk_strobe(struct jtdev *p, unsigned int count) { }
+static void jtpif_tclk(struct jtdev *p, int out) { }
+static int jtpif_tclk_get(struct jtdev *p) { return 0; }
+static void jtpif_tclk_strobe(struct jtdev *p, unsigned int count) { }
 
-void jtdev_led_green(struct jtdev *p, int out) { }
-void jtdev_led_red(struct jtdev *p, int out) { }
+static void jtpif_led_green(struct jtdev *p, int out) { }
+static void jtpif_led_red(struct jtdev *p, int out) { }
 #endif
+
+const struct jtdev_func jtdev_func_pif = {
+  .jtdev_open        = jtpif_open,
+  .jtdev_close       = jtpif_close,
+  .jtdev_power_on    = jtpif_power_on,
+  .jtdev_power_off   = jtpif_power_off,
+  .jtdev_connect     = jtpif_connect,
+  .jtdev_release     = jtpif_release,
+  .jtdev_tck	     = jtpif_tck,
+  .jtdev_tms	     = jtpif_tms,
+  .jtdev_tdi	     = jtpif_tdi,
+  .jtdev_rst	     = jtpif_rst,
+  .jtdev_tst	     = jtpif_tst,
+  .jtdev_tdo_get     = jtpif_tdo_get,
+  .jtdev_tclk	     = jtpif_tclk,
+  .jtdev_tclk_get    = jtpif_tclk_get,
+  .jtdev_tclk_strobe = jtpif_tclk_strobe,
+  .jtdev_led_green   = jtpif_led_green,
+  .jtdev_led_red     = jtpif_led_red
+};
+

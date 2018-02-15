@@ -1,5 +1,5 @@
 /* MSPDebug - debugging tool for MSP430 MCUs
- * Copyright (C) 2009-2012 Daniel Beer
+ * Copyright (C) 2009-2015 Daniel Beer
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -54,12 +54,21 @@
 #include "input.h"
 #include "input_async.h"
 #include "pif.h"
+#include "loadbsl.h"
+#include "fet3.h"
+#include "rom_bsl.h"
+#include "chipinfo.h"
+
+#ifdef __CYGWIN__
+#include <sys/cygwin.h>
+#endif
 
 #define OPT_NO_RC		0x01
 #define OPT_EMBEDDED		0x02
 
 struct cmdline_args {
 	const char		*driver_name;
+	const char		*alt_config;
 	int			flags;
 	struct device_args	devarg;
 };
@@ -77,12 +86,16 @@ static const struct device_class *const driver_table[] = {
 	&device_gdbc,
 	&device_tilib,
 	&device_goodfet,
-	&device_pif
+	&device_pif,
+	&device_gpio,
+	&device_loadbsl,
+	&device_ezfet,
+	&device_rom_bsl
 };
 
 static const char *version_text =
-"MSPDebug version 0.21 - debugging tool for MSP430 MCUs\n"
-"Copyright (C) 2009-2012 Daniel Beer <dlbeer@gmail.com>\n"
+"MSPDebug version 0.23 - debugging tool for MSP430 MCUs\n"
+"Copyright (C) 2009-2015 Daniel Beer <dlbeer@gmail.com>\n"
 "This is free software; see the source for copying conditions.  There is NO\n"
 "warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR "
 "PURPOSE.\n";
@@ -91,7 +104,7 @@ static void usage(const char *progname)
 {
 	int i;
 
-	printc_err("Usage: %s [options] <driver> [command ...]\n"
+	printc("Usage: %s [options] <driver> [command ...]\n"
 "\n"
 "    -q\n"
 "        Start in quiet mode.\n"
@@ -106,7 +119,9 @@ static void usage(const char *progname)
 "    -v voltage\n"
 "        Set the supply voltage, in millivolts.\n"
 "    -n\n"
-"        Do not read ~/.mspdebug on startup.\n"
+"        Do not read a configuration file on startup.\n"
+"    -C <file>\n"
+"        Load an alternative configuration file.\n"
 "    --long-password\n"
 "        Send 32-byte IVT as BSL password (flash-bsl only)\n"
 "    --help\n"
@@ -115,6 +130,8 @@ static void usage(const char *progname)
 "        Show a list of devices supported by the FET driver.\n"
 "    --fet-force-id string\n"
 "        Override the device ID returned by the FET.\n"
+"    --fet-skip-close\n"
+"        Skip the JTAG close procedure when using the FET driver.\n"
 "    --usb-list\n"
 "        Show a list of available USB devices.\n"
 "    --force-reset\n"
@@ -128,6 +145,14 @@ static void usage(const char *progname)
 "        Show copyright and version information.\n"
 "    --embedded\n"
 "        Run in embedded mode.\n"
+"    --bsl-entry-sequence <seq>\n"
+"        Specify a BSL entry sequence. Each character specifies a modem\n"
+"        control line transition (R: RTS on, r: RTS off, D: DTR on, \n"
+"        d: DTR off).\n"
+"    --bsl-gpio-rts\n"
+"        On some host (say RaspberryPi) defines a GPIO pin# to be used as RTS\n"
+"    --bsl-gpio-dtr\n"
+"        On some host (say RaspberryPi) defines a GPIO pin# to be used as DTR\n"
 "\n"
 "Most drivers connect by default via USB, unless told otherwise via the\n"
 "-d option. By default, the first USB device found is opened.\n"
@@ -144,17 +169,27 @@ static void usage(const char *progname)
 	}
 }
 
-static void process_rc_file(void)
+static void process_rc_file(const char *config)
 {
-	const char *home = getenv("HOME");
 	char text[256];
 
-	if (!home)
-		return;
+	if (!config) {
+		if (!access(".mspdebug", F_OK)) {
+			config = ".mspdebug";
+		} else {
+			const char *home = getenv("HOME");
 
-	snprintf(text, sizeof(text), "%s/.mspdebug", home);
-	if (!access(text, F_OK))
-		process_file(text, 0);
+			if (home) {
+				snprintf(text, sizeof(text), "%s/.mspdebug",
+					 home);
+				if (!access(text, F_OK))
+					config = text;
+			}
+		}
+	}
+
+	if (config)
+		process_file(config, 0);
 }
 
 static int add_fet_device(void *user_data, const struct fet_db_record *r)
@@ -204,25 +239,51 @@ static int list_devices(void)
 static int parse_cmdline_args(int argc, char **argv,
 			      struct cmdline_args *args)
 {
-	int opt;
+	enum {
+		LOPT_HELP = 0x100,
+		LOPT_FET_LIST,
+		LOPT_FET_FORCE_ID,
+		LOPT_FET_SKIP_CLOSE,
+		LOPT_USB_LIST,
+		LOPT_VERSION,
+		LOPT_LONG_PASSWORD,
+		LOPT_FORCE_RESET,
+		LOPT_ALLOW_FW_UPDATE,
+		LOPT_REQUIRE_FW_UPDATE,
+		LOPT_EMBEDDED,
+		LOPT_BSL_ENTRY_SEQUENCE,
+		LOPT_BSL_GPIO_RTS,
+		LOPT_BSL_GPIO_DTR,
+	};
+
 	static const struct option longopts[] = {
-		{"help",                0, 0, 'H'},
-		{"fet-list",            0, 0, 'L'},
-		{"fet-force-id",        1, 0, 'F'},
-		{"usb-list",            0, 0, 'I'},
-		{"version",             0, 0, 'V'},
-		{"long-password",       0, 0, 'P'},
-		{"force-reset",		0, 0, 'R'},
-		{"allow-fw-update",	0, 0, 'A'},
-		{"require-fw-update",	1, 0, 'M'},
-		{"embedded",		0, 0, 'E'},
+		{"help",                0, 0, LOPT_HELP},
+		{"fet-list",            0, 0, LOPT_FET_LIST},
+		{"fet-force-id",        1, 0, LOPT_FET_FORCE_ID},
+		{"fet-skip-close",      0, 0, LOPT_FET_SKIP_CLOSE},
+		{"usb-list",            0, 0, LOPT_USB_LIST},
+		{"version",             0, 0, LOPT_VERSION},
+		{"long-password",       0, 0, LOPT_LONG_PASSWORD},
+		{"force-reset",		0, 0, LOPT_FORCE_RESET},
+		{"allow-fw-update",	0, 0, LOPT_ALLOW_FW_UPDATE},
+		{"require-fw-update",	1, 0, LOPT_REQUIRE_FW_UPDATE},
+		{"embedded",		0, 0, LOPT_EMBEDDED},
+		{"bsl-entry-sequence",	1, 0, LOPT_BSL_ENTRY_SEQUENCE},
+		{"bsl-gpio-rts",	1, 0, LOPT_BSL_GPIO_RTS},
+		{"bsl-gpio-dtr",	1, 0, LOPT_BSL_GPIO_DTR},
 		{NULL, 0, 0, 0}
 	};
+
+	int opt;
 	int want_usb = 0;
 
-	while ((opt = getopt_long(argc, argv, "d:jv:nU:s:q",
+	while ((opt = getopt_long(argc, argv, "d:jv:nU:s:qC:",
 				  longopts, NULL)) >= 0)
 		switch (opt) {
+		case 'C':
+			args->alt_config = optarg;
+			break;
+
 		case 'q':
 			{
 				static const union opdb_value v = {
@@ -233,15 +294,28 @@ static int parse_cmdline_args(int argc, char **argv,
 			}
 			break;
 
-		case 'E':
+		case LOPT_BSL_ENTRY_SEQUENCE:
+			args->devarg.bsl_entry_seq = optarg;
+			break;
+
+		case LOPT_BSL_GPIO_RTS:
+			args->devarg.bsl_gpio_used = 1;
+			args->devarg.bsl_gpio_rts = atoi ( optarg );
+			break;
+		case LOPT_BSL_GPIO_DTR:
+			args->devarg.bsl_gpio_used = 1;
+			args->devarg.bsl_gpio_dtr = atoi ( optarg );
+			break;
+
+		case LOPT_EMBEDDED:
 			args->flags |= OPT_EMBEDDED;
 			break;
 
-		case 'A':
+		case LOPT_ALLOW_FW_UPDATE:
 			args->devarg.flags |= DEVICE_FLAG_DO_FWUPDATE;
 			break;
 
-		case 'I':
+		case LOPT_USB_LIST:
 			usb_init();
 			usb_find_busses();
 			usb_find_devices();
@@ -253,7 +327,7 @@ static int parse_cmdline_args(int argc, char **argv,
 			args->devarg.flags |= DEVICE_FLAG_TTY;
 			break;
 
-		case 'M':
+		case LOPT_REQUIRE_FW_UPDATE:
 			args->devarg.require_fwupdate = optarg;
 			break;
 
@@ -266,19 +340,24 @@ static int parse_cmdline_args(int argc, char **argv,
 			args->devarg.requested_serial = optarg;
 			break;
 
-		case 'L':
+		case LOPT_FET_LIST:
 			exit(list_devices());
 
-		case 'F':
+		case LOPT_FET_FORCE_ID:
 			args->devarg.forced_chip_id = optarg;
 			break;
 
-		case 'H':
+		case LOPT_FET_SKIP_CLOSE:
+			args->devarg.flags |= DEVICE_FLAG_SKIP_CLOSE;
+			break;
+
+		case LOPT_HELP:
 			usage(argv[0]);
 			exit(0);
 
-		case 'V':
+		case LOPT_VERSION:
 			printc("%s", version_text);
+			printc("%s", chipinfo_copyright());
 			exit(0);
 
 		case 'v':
@@ -293,11 +372,11 @@ static int parse_cmdline_args(int argc, char **argv,
 			args->flags |= OPT_NO_RC;
 			break;
 
-		case 'P':
+		case LOPT_LONG_PASSWORD:
 			args->devarg.flags |= DEVICE_FLAG_LONG_PW;
 			break;
 
-		case 'R':
+		case LOPT_FORCE_RESET:
 			args->devarg.flags |= DEVICE_FLAG_FORCE_RESET;
 			break;
 
@@ -400,7 +479,8 @@ int main(int argc, char **argv)
 		goto fail_sockets;
 	}
 
-	printc_dbg("%s\n", version_text);
+	printc_dbg("%s", version_text);
+	printc_dbg("%s\n", chipinfo_copyright());
 	if (setup_driver(&args) < 0) {
 		ret = -1;
 		goto fail_driver;
@@ -412,7 +492,7 @@ int main(int argc, char **argv)
 	simio_init();
 
 	if (!(args.flags & OPT_NO_RC))
-		process_rc_file();
+		process_rc_file(args.alt_config);
 
 	/* Process commands */
 	if (optind < argc) {
@@ -440,7 +520,10 @@ fail_parse:
 	 * may still have a running background thread for input. If so,
 	 * returning from main() won't cause the process to terminate.
 	 */
-#if defined(__Windows__) || defined(__CYGWIN__)
+#if defined(__CYGWIN__)
+	cygwin_internal(CW_EXIT_PROCESS,
+		(ret == 0) ? EXIT_SUCCESS : EXIT_FAILURE, 1);
+#elif defined(__Windows__)
 	ExitProcess(ret);
 #endif
 	return ret;
