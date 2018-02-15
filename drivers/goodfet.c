@@ -67,6 +67,14 @@
 #define MAX_LEN			1024
 #define MAX_MEM_BLOCK		128
 
+
+struct goodfet {
+	struct device		base;
+
+	sport_t			serial_fd;
+};
+
+
 /************************************************************************
  * GoodFET protocol handling
  */
@@ -200,12 +208,19 @@ fail:
  * GoodFET MSP430 JTAG operations
  */
 
-/* Read a word-aligned block from any kind of memory. */
-static int read_words(sport_t fd, address_t addr,
-		      address_t len, uint8_t *data)
+/* Read a word-aligned block from any kind of memory.
+ * returns the number of bytes read or -1 on failure
+ */
+static int read_words(device_t dev, const struct chipinfo_memory *m,
+		address_t addr, address_t len, uint8_t *data)
 {
+	struct goodfet *gc = (struct goodfet *)dev;
+	sport_t fd = gc->serial_fd;
 	struct packet pkt;
 	uint8_t req[6];
+
+	if (len > MAX_MEM_BLOCK)
+		len = MAX_MEM_BLOCK;
 
 	req[0] = addr;
 	req[1] = addr >> 8;
@@ -227,7 +242,7 @@ static int read_words(sport_t fd, address_t addr,
 	}
 
 	memcpy(data, pkt.data, pkt.len);
-	return 0;
+	return len;
 }
 
 /* Write a word to RAM. */
@@ -277,38 +292,37 @@ static int write_flash_block(sport_t fd, address_t addr,
 	return 0;
 }
 
-/* Write a single byte by reading and rewriting a word. */
-static int write_byte(sport_t fd, address_t addr, uint8_t value)
+/* Write a word-aligned block to any kind of memory.
+ * returns the number of bytes written or -1 on failure
+ */
+static int write_words(device_t dev, const struct chipinfo_memory *m,
+		address_t addr, address_t len, const uint8_t *data)
 {
-	address_t aligned = addr & ~1;
-	uint8_t data[2];
+	struct goodfet *gc = (struct goodfet *)dev;
+	sport_t fd = gc->serial_fd;
 	int r;
 
-	if (read_words(fd, aligned, 2, data) < 0)
-		goto fail;
+	if (len > MAX_MEM_BLOCK)
+		len = MAX_MEM_BLOCK;
 
-	data[addr & 1] = value;
+	if (m->type != CHIPINFO_MEMTYPE_FLASH) {
+		len = 2;
+		r = write_ram_word(fd, addr, r16le(data));
+	} else {
+		r = write_flash_block(fd, addr, len, data);
+	}
 
-	if (addr < 0x8000)
-		r = write_ram_word(fd, aligned,
-				   ((uint16_t)data[0]) |
-				   (((uint16_t)data[1]) << 8));
-	else
-		r = write_flash_block(fd, aligned, 2, data);
+	if (r < 0) {
+		printc_err("goodfet: write_words at address 0x%x failed\n", addr);
+		return -1;
+	}
 
-	if (r < 0)
-		goto fail;
-
-	return 0;
-fail:
-	printc_err("good_fet: write_byte at address 0x%x failed\n", addr);
-	return -1;
+	return len;
 }
 
 static int init_device(sport_t fd)
 {
 	struct packet pkt;
-	uint8_t chip_id[2];
 
 	printc_dbg("Initializing...\n");
 
@@ -352,14 +366,6 @@ static int init_device(sport_t fd)
 		return -1;
 	}
 
-	if (read_words(fd, 0xff0, 2, chip_id) < 0) {
-		printc_err("goodfet: failed to read chip ID\n");
-		xfer(fd, APP_JTAG430, GLOBAL_STOP, 0, NULL, &pkt);
-		return -1;
-	}
-
-	printc_dbg("Chip ID: 0x%02x%02x\n", chip_id[0], chip_id[1]);
-
 	return 0;
 }
 
@@ -367,120 +373,16 @@ static int init_device(sport_t fd)
  * MSPDebug Device interface
  */
 
-struct goodfet {
-	struct device		base;
-
-	sport_t			serial_fd;
-};
-
 static int goodfet_readmem(device_t dev_base, address_t addr,
 			   uint8_t *mem, address_t len)
 {
-	struct goodfet *gc = (struct goodfet *)dev_base;
-
-	if (!len)
-		return 0;
-
-	/* Handle unaligned start */
-	if (addr & 1) {
-		uint8_t data[2];
-
-		if (read_words(gc->serial_fd, addr ^ 1, 2, data) < 0)
-			goto fail;
-
-		mem[0] = data[1];
-		addr++;
-		mem++;
-		len--;
-	}
-
-	/* Read aligned blocks */
-	while (len >= 2) {
-		int plen = MAX_MEM_BLOCK;
-
-		if (plen > len)
-			plen = len;
-		plen &= ~1;
-
-		if (read_words(gc->serial_fd, addr, plen, mem) < 0)
-			goto fail;
-
-		addr += plen;
-		mem += plen;
-		len -= plen;
-	}
-
-	/* Handle unaligned end */
-	if (len) {
-		uint8_t data[2];
-
-		if (read_words(gc->serial_fd, addr, 2, data) < 0)
-			goto fail;
-
-		mem[0] = data[0];
-	}
-
-	return 0;
-
-fail:
-	printc_err("goodfet: readmem failed at 0x%x\n", addr);
-	return -1;
+	return readmem(dev_base, addr, mem, len, read_words);
 }
 
 static int goodfet_writemem(device_t dev_base, address_t addr,
 			    const uint8_t *mem, address_t len)
 {
-	struct goodfet *gc = (struct goodfet *)dev_base;
-
-	if (!len)
-		return 0;
-
-	/* Handle unaligned start */
-	if (addr & 1) {
-		if (write_byte(gc->serial_fd, addr, mem[0]) < 0)
-			goto fail;
-
-		addr++;
-		mem++;
-		len--;
-	}
-
-	while (len >= 2) {
-		if (addr < 0x8000) {
-			if (write_ram_word(gc->serial_fd, addr,
-					   ((uint16_t)mem[0]) |
-					   (((uint16_t)mem[1]) << 8)) < 0)
-				goto fail;
-
-			addr += 2;
-			mem += 2;
-			len -= 2;
-		} else {
-			int plen = MAX_MEM_BLOCK;
-
-			if (plen > len)
-				plen = len;
-			plen &= ~1;
-
-			if (write_flash_block(gc->serial_fd, addr,
-					      plen, mem) < 0)
-				goto fail;
-
-			addr += plen;
-			mem += plen;
-			len -= plen;
-		}
-	}
-
-	/* Handle unaligned end */
-	if (len && (write_byte(gc->serial_fd, addr, mem[0]) < 0))
-		goto fail;
-
-	return 0;
-
-fail:
-	printc_err("goodfet: writemem failed at 0x%x\n", addr);
-	return -1;
+	return writemem(dev_base, addr, mem, len, write_words, read_words);
 }
 
 static int goodfet_setregs(device_t dev_base, const address_t *regs)
@@ -626,8 +528,10 @@ static device_t goodfet_open(const struct device_args *args)
 		return NULL;
 	}
 
+        memset(gc, 0, sizeof(*gc));
 	gc->base.type = &device_goodfet;
 	gc->base.max_breakpoints = 0;
+	gc->base.need_probe = 1;
 
 	gc->serial_fd = sport_open(args->path, 115200, 0);
 	if (SPORT_ISERR(gc->serial_fd)) {
