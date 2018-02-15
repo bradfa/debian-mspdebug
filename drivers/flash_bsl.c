@@ -36,6 +36,7 @@ struct flash_bsl_device {
 
 	sport_t		serial_fd;
 	int		long_password;
+	const struct device_args *args;
 
 	const char	*seq;
 };
@@ -554,7 +555,15 @@ static void flash_bsl_destroy(device_t dev_base)
 {
 	struct flash_bsl_device *dev = (struct flash_bsl_device *)dev_base;
 
-	bsllib_seq_do(dev->serial_fd, bsllib_seq_next(dev->seq));
+	if ( dev->args->bsl_gpio_used )
+	{
+		bsllib_seq_do_gpio(dev->args->bsl_gpio_rts, dev->args->bsl_gpio_dtr,
+							bsllib_seq_next(dev->seq));
+	}
+	else
+	{
+		bsllib_seq_do(dev->serial_fd, bsllib_seq_next(dev->seq));
+	}
 	sport_close(dev->serial_fd);
 	free(dev);
 }
@@ -581,6 +590,7 @@ static device_t flash_bsl_open(const struct device_args *args)
 
 	memset(dev, 0, sizeof(*dev));
 	dev->base.type = &device_flash_bsl;
+	dev->args = args;
 
 	dev->serial_fd = sport_open(args->path, 9600, SPORT_EVEN_PARITY);
 	if (SPORT_ISERR(dev->serial_fd)) {
@@ -597,9 +607,19 @@ static device_t flash_bsl_open(const struct device_args *args)
 	dev->long_password = args->flags & DEVICE_FLAG_LONG_PW;
 
 	/* enter bootloader */
-	if (bsllib_seq_do(dev->serial_fd, dev->seq) < 0) {
-		printc_err("BSL entry sequence failed\n");
-		goto fail;
+	if ( args->bsl_gpio_used )
+	{
+		if (bsllib_seq_do_gpio(args->bsl_gpio_rts, args->bsl_gpio_dtr, dev->seq) < 0) {
+      printc_err("BSL entry sequence failed\n");
+			goto fail;
+		}
+	}
+	else
+	{
+		if (bsllib_seq_do(dev->serial_fd, dev->seq) < 0) {
+      printc_err("BSL entry sequence failed\n");
+			goto fail;
+		}
 	}
 
 	delay_ms(500);
@@ -645,5 +665,6 @@ const struct device_class device_flash_bsl = {
 	.setregs	= flash_bsl_setregs,
 	.ctl		= flash_bsl_ctl,
 	.poll		= flash_bsl_poll,
-	.erase		= flash_bsl_erase
+	.erase		= flash_bsl_erase,
+	.getconfigfuses = NULL
 };
